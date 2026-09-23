@@ -8,10 +8,11 @@ import {
   type MarketSymbol,
 } from "@/lib/market/types";
 import {
-  ENTRY_CUTOFF_MS,
   evaluateSignal,
+  ENTRY_CUTOFF_MS,
   type SignalReadout,
 } from "@/lib/strategy/engine";
+import { nextLocks } from "@/lib/strategy/locks";
 import { useMutation, useQuery } from "convex/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMarketFeed } from "./use-market-feed";
@@ -65,59 +66,31 @@ export function useSignalConsole(): SignalConsole {
   const [locks, setLocks] = useState<Partial<Record<MarketSymbol, SignalReadout>>>({});
 
   useEffect(() => {
-    let changed = false;
-    const next: Partial<Record<MarketSymbol, SignalReadout>> = {};
+    const { locks: next, lockedCalls } = nextLocks(locksRef.current, readouts);
+    if (next === locksRef.current) return;
 
-    for (const symbol of MARKET_SYMBOLS) {
-      const readout = readouts[symbol];
-      const existing = locksRef.current[symbol];
+    locksRef.current = next;
+    setLocks(next);
 
-      if (!readout) {
-        next[symbol] = existing;
-        continue;
-      }
-      if (existing && existing.windowStart === readout.windowStart) {
-        next[symbol] = existing;
-        continue;
-      }
-      // New round: only a call published before the entry cutoff can be locked.
-      if (
-        readout.direction !== "stand-aside" &&
-        readout.elapsedMs < ENTRY_CUTOFF_MS
-      ) {
-        next[symbol] = readout;
-        void logSignal({
-          symbol: readout.symbol,
-          windowStart: readout.windowStart,
-          windowEnd: readout.windowEnd,
-          direction: readout.direction,
-          score: readout.score,
-          confidence: readout.confidence,
-          effectiveConfidence: readout.effectiveConfidence,
-          maxEntryPrice: readout.maxEntryPrice,
-          referencePrice: readout.referencePrice,
-          regime: readout.regime,
-          phaseAtSignal: readout.phase,
-          entryDeadline: readout.entryDeadline,
-          factors: readout.factors.map((factor) => ({ ...factor })),
-          notes: readout.notes,
-        }).catch((error: unknown) => {
-          console.warn("[signal-console] could not journal the signal", error);
-        });
-      } else {
-        next[symbol] = undefined;
-      }
-    }
-
-    for (const symbol of MARKET_SYMBOLS) {
-      if (locksRef.current[symbol] !== next[symbol]) {
-        changed = true;
-        break;
-      }
-    }
-    if (changed) {
-      locksRef.current = next;
-      setLocks(next);
+    for (const readout of lockedCalls) {
+      void logSignal({
+        symbol: readout.symbol,
+        windowStart: readout.windowStart,
+        windowEnd: readout.windowEnd,
+        direction: readout.direction,
+        score: readout.score,
+        confidence: readout.confidence,
+        effectiveConfidence: readout.effectiveConfidence,
+        maxEntryPrice: readout.maxEntryPrice,
+        referencePrice: readout.referencePrice,
+        regime: readout.regime,
+        phaseAtSignal: readout.phase,
+        entryDeadline: readout.entryDeadline,
+        factors: readout.factors.map((factor) => ({ ...factor })),
+        notes: readout.notes,
+      }).catch((error: unknown) => {
+        console.warn("[signal-console] could not journal the signal", error);
+      });
     }
   }, [readouts, logSignal]);
 
