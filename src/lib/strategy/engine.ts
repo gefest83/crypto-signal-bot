@@ -28,8 +28,31 @@ export const ENTRY_CUTOFF_MS = 150_000;
 export const MIN_SCORE = 0.22;
 /** Minimum confidence (before phase decay) required to publish a call. */
 export const MIN_CONFIDENCE = 60;
-/** Margin we insist on between our confidence and the contract entry price. */
+/** Margin we insist on between our estimated probability and the contract entry price. */
 export const EDGE_MARGIN_PP = 6;
+
+/**
+ * Priors for the estimated win probability that the entry-price gate uses.
+ *
+ * `confidence` is a strength / factor-agreement score on a 50–72 display scale
+ * — it is NOT a probability. Treating it as one is what previously let the gate
+ * buy after the contract had already repriced the move. `estimatedProbability`
+ * is a separate quantity on a genuine 0–1 probability scale, used only to decide
+ * the highest contract price at which the call still has positive expected value.
+ *
+ * The six factors re-measure the same recent impulse, so their raw vote
+ * overstates the edge; the estimate stays deliberately close to a coin flip.
+ * These are fixed priors for a 1-minute signal over a 5-minute round — they are
+ * not fitted to any backtest.
+ */
+export const PROB_FLOOR = 0.5;
+export const PROB_CEIL = 0.6;
+/** |score| at which the estimate reaches PROB_CEIL; beyond it the estimate caps. */
+export const PROB_SCORE_REF = 0.6;
+
+/** Valid probability bounds for the entry-price gate. */
+export const MIN_ENTRY_PRICE = 0.01;
+export const MAX_ENTRY_PRICE = 0.99;
 
 export type Direction = "up" | "down" | "stand-aside";
 export type Phase = "early" | "mid" | "late";
@@ -58,6 +81,11 @@ export type SignalReadout = {
   confidence: number;
   /** Confidence that still applies in the current phase of the round. */
   effectiveConfidence: number;
+  /**
+   * Estimated win probability, on a genuine 0–1 scale. Separate from
+   * `confidence` (strength/agreement) and used only for the entry-price gate.
+   */
+  estimatedProbability: number;
   factors: Factor[];
   regime: Regime;
   volatilityRatio: number;
@@ -351,9 +379,10 @@ export function evaluateSignal({
     1,
   );
 
-  // Calibrated on purpose: a 5-minute directional call is a small edge, so
-  // confidence lives in a credible 51–72% band instead of an inflated one.
-  // That band is what makes "макс. цена входа = уверенность − 6 п.п." honest.
+  // Confidence is a strength / agreement score, not a probability: it gates
+  // publication only. The entry price is derived separately from
+  // `estimatedProbability` below, so a strong recent impulse can no longer
+  // masquerade as a high win probability at the gate.
   let confidence = 51 + 17 * Math.min(1, Math.abs(score) / 0.5) + 4 * agreement;
 
   /* Guard 1: do not chase an exhausted move ------------------------- */
@@ -379,10 +408,21 @@ export function evaluateSignal({
       : "down"
     : "stand-aside";
 
+  /* Estimated win probability — a real probability, unlike `confidence` ----- */
+  // Monotone in signal strength, but it neither saturates at |score| = 0.5 nor
+  // rewards factor agreement (which is inflated by the factors' shared input).
+  const estimatedProbability =
+    PROB_FLOOR +
+    (PROB_CEIL - PROB_FLOOR) * clamp(Math.abs(score) / PROB_SCORE_REF, 0, 1);
+
   const maxEntryPrice =
     direction === "stand-aside"
       ? 0
-      : clamp(Math.round((confidence / 100 - EDGE_MARGIN_PP / 100) * 100) / 100, 0.5, 0.9);
+      : clamp(
+          Math.round((estimatedProbability - EDGE_MARGIN_PP / 100) * 100) / 100,
+          MIN_ENTRY_PRICE,
+          MAX_ENTRY_PRICE,
+        );
 
   const roundPnlPct =
     referencePrice === 0 ? 0 : ((price - referencePrice) / referencePrice) * 100;
@@ -429,6 +469,7 @@ export function evaluateSignal({
     score: Math.round(score * 1000) / 1000,
     confidence: Math.round(confidence),
     effectiveConfidence: Math.round(effectiveConfidence),
+    estimatedProbability: Math.round(estimatedProbability * 1000) / 1000,
     factors,
     regime,
     volatilityRatio: Math.round(volatilityRatio * 100) / 100,

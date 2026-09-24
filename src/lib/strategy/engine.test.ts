@@ -3,11 +3,17 @@ import { describe, expect, it } from "vitest";
 import type { Candle, MarketSymbol } from "@/lib/market/types";
 import { ROUND_MS, roundWindow } from "@/lib/market/types";
 import {
+  EDGE_MARGIN_PP,
   ENTRY_CUTOFF_MS,
   ENTRY_WINDOW_MS,
   evaluateSignal,
+  MAX_ENTRY_PRICE,
   MIN_CONFIDENCE,
+  MIN_ENTRY_PRICE,
   MIN_SCORE,
+  PROB_CEIL,
+  PROB_FLOOR,
+  PROB_SCORE_REF,
 } from "./engine";
 
 /* ------------------------------------------------------------------ */
@@ -216,15 +222,69 @@ describe("evaluateSignal — фазы раунда", () => {
   });
 });
 
+describe("evaluateSignal — оценка вероятности", () => {
+  it("estimatedProbability лежит в [PROB_FLOOR, PROB_CEIL] на шкале 0–1", () => {
+    const strong = risingCandles(120);
+    const strongReadout = evaluate(
+      strong,
+      strong[strong.length - 1].close,
+      OPEN + 10_000,
+    )!;
+    expect(strongReadout.estimatedProbability).toBeGreaterThanOrEqual(PROB_FLOOR);
+    expect(strongReadout.estimatedProbability).toBeLessThanOrEqual(PROB_CEIL);
+
+    const flat = evaluate(flatCandles(120), BASE, OPEN + 10_000)!;
+    expect(flat.estimatedProbability).toBeGreaterThanOrEqual(PROB_FLOOR);
+    expect(flat.estimatedProbability).toBeLessThanOrEqual(PROB_CEIL);
+  });
+
+  it("это вероятность, а не уверенность: шкала не совпадает с confidence", () => {
+    const candles = risingCandles(90);
+    const readout = evaluate(
+      candles,
+      candles[candles.length - 1].close,
+      OPEN + 20_000,
+    )!;
+    // conviction живёт в 50–72, вероятность — в 0.50–0.60.
+    expect(readout.estimatedProbability).toBeLessThan(readout.confidence / 100);
+    expect(readout.estimatedProbability).toBeLessThan(0.65);
+  });
+
+  it("монотонна по |score| и не насыщается на пороге 0.5", () => {
+    const candles = risingCandles(90);
+    const readout = evaluate(
+      candles,
+      candles[candles.length - 1].close,
+      OPEN + 20_000,
+    )!;
+    const expected =
+      PROB_FLOOR +
+      (PROB_CEIL - PROB_FLOOR) *
+        Math.min(1, Math.abs(readout.score) / PROB_SCORE_REF);
+    expect(readout.estimatedProbability).toBeCloseTo(expected, 2);
+  });
+});
+
 describe("evaluateSignal — максимальная цена входа", () => {
-  it("maxEntryPrice = уверенность − 6 п.п., зажат в [0.5, 0.9]", () => {
+  it("maxEntryPrice = estimatedProbability − EDGE_MARGIN, без уверенности", () => {
     const candles = risingCandles(90);
     const price = candles[candles.length - 1].close;
     const readout = evaluate(candles, price, OPEN + 20_000)!;
 
     if (readout.direction !== "stand-aside") {
-      const expected = Math.max(0.5, Math.min(0.9, (readout.confidence - 6) / 100));
+      const expected = Math.max(
+        MIN_ENTRY_PRICE,
+        Math.min(
+          MAX_ENTRY_PRICE,
+          Math.round((readout.estimatedProbability - EDGE_MARGIN_PP / 100) * 100) / 100,
+        ),
+      );
       expect(readout.maxEntryPrice).toBeCloseTo(expected, 2);
+      // Регрессия на старую ошибку: гейт больше не строится из confidence и не
+      // может превысить PROB_CEIL − margin (старая формула доходила до 0.66).
+      expect(readout.maxEntryPrice).toBeLessThanOrEqual(
+        Math.round((PROB_CEIL - EDGE_MARGIN_PP / 100) * 100) / 100,
+      );
     } else {
       expect(readout.maxEntryPrice).toBe(0);
     }

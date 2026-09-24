@@ -19,6 +19,7 @@ function readout(overrides: Partial<SignalReadout> = {}): SignalReadout {
     score: 0.42,
     confidence: 65,
     effectiveConfidence: 65,
+    estimatedProbability: 0.55,
     factors: [],
     regime: "normal",
     volatilityRatio: 1,

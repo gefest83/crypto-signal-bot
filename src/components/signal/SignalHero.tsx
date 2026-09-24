@@ -400,9 +400,11 @@ export function SignalHero({
               </p>
               <p className="font-mono text-lg tabular-nums">
                 {call ? call.maxEntryPrice.toFixed(2) : "—"}
-                <span className="ms-2 text-xs text-muted-foreground">
-                  уверенность − 6 п.п.
-                </span>
+                {call ? (
+                  <span className="ms-2 text-xs text-muted-foreground">
+                    оценка вероятности {Math.round(call.estimatedProbability * 100)}% − 6 п.п.
+                  </span>
+                ) : null}
               </p>
             </div>
           </div>
