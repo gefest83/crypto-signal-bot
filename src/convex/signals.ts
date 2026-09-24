@@ -150,12 +150,12 @@ export const signalStats = query({
             q.eq("userId", userId).eq("symbol", symbol),
           )
           .order("desc")
-          .take(300)
+          .take(500)
       : await ctx.db
           .query("signals")
           .withIndex("by_user_window", (q) => q.eq("userId", userId))
           .order("desc")
-          .take(300);
+          .take(500);
 
     let wins = 0;
     let losses = 0;
