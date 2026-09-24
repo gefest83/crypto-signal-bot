@@ -23,6 +23,7 @@ export const logSignal = mutation({
     effectiveConfidence: v.number(),
     estimatedProbability: v.number(),
     maxEntryPrice: v.number(),
+    entryLimitPrice: v.optional(v.number()),
     referencePrice: v.number(),
     regime: v.string(),
     phaseAtSignal: v.union(
@@ -103,7 +104,7 @@ export const recentSignals = query({
     const userId = await getAuthUserId(ctx);
     if (!userId) return [];
     const symbol = args.symbol;
-    const take = args.limit ?? 30;
+    const take = args.limit ?? 50;
 
     if (symbol) {
       return await ctx.db
@@ -169,7 +170,7 @@ export const signalStats = query({
       if (row.outcome === "win") wins += 1;
       else if (row.outcome === "loss") losses += 1;
       else ties += 1;
-      if (lastResults.length < 20) lastResults.push(row.outcome);
+      if (lastResults.length < 50) lastResults.push(row.outcome);
     }
 
     const resolved = wins + losses + ties;

@@ -69,7 +69,7 @@ function OutcomeBadge({ outcome }: { outcome?: "win" | "loss" | "tie" }) {
 
 export function RoundHistory() {
   const stats = useQuery(api.signals.signalStats, {});
-  const signals = useQuery(api.signals.recentSignals, { limit: 14 });
+  const signals = useQuery(api.signals.recentSignals, { limit: 50 });
   const clearSignals = useMutation(api.signals.clearSignals);
 
   const rows = signals ?? [];
@@ -192,6 +192,9 @@ export function RoundHistory() {
                 Увер.
               </TableHead>
               <TableHead className="text-right text-[11px] tracking-wider uppercase">
+                Цена контракта
+              </TableHead>
+              <TableHead className="text-right text-[11px] tracking-wider uppercase">
                 Откр. → закр.
               </TableHead>
               <TableHead className="text-right text-[11px] tracking-wider uppercase">
@@ -203,7 +206,7 @@ export function RoundHistory() {
             {rows.length === 0 ? (
               <TableRow>
                 <TableCell
-                  colSpan={6}
+                  colSpan={7}
                   className="py-8 text-center text-sm text-muted-foreground"
                 >
                   Журнал пуст. Первый вызов запишется, как только появится перевес.
@@ -237,6 +240,12 @@ export function RoundHistory() {
                     </TableCell>
                     <TableCell className="text-right font-mono text-xs tabular-nums">
                       {row.confidence}%
+                    </TableCell>
+                    <TableCell
+                      className="text-right font-mono text-xs tabular-nums"
+                      title="Лимит цены контракта, рассчитанный при фиксации сигнала"
+                    >
+                      {(row.entryLimitPrice ?? row.maxEntryPrice).toFixed(2)}
                     </TableCell>
                     <TableCell className="text-right font-mono text-xs tabular-nums text-muted-foreground">
                       {formatPrice(row.referencePrice)}

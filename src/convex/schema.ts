@@ -59,6 +59,8 @@ const schema = defineSchema(
       effectiveConfidence: v.number(),
       estimatedProbability: v.number(),
       maxEntryPrice: v.number(),
+      /** The price cap calculated when the call was locked, if available. */
+      entryLimitPrice: v.optional(v.number()),
       referencePrice: v.number(),
       regime: v.string(),
       phaseAtSignal: v.union(
