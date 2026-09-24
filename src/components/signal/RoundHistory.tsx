@@ -81,7 +81,7 @@ export function RoundHistory() {
           <h2 className="text-sm font-semibold tracking-tight">Журнал раундов</h2>
           <p className="mt-1 text-xs text-muted-foreground">
             Каждый вызов фиксируется один раз и оценивается по реальному закрытию
-            раунда. P&L: при ставке $1 выигрыш считается как 1 / цена контракта,
+            раунда. P&L: при ставке $1 чистая прибыль равна 1 / цена контракта − 1,
             проигрыш — −1.
           </p>
         </div>
@@ -131,7 +131,7 @@ export function RoundHistory() {
               : `${stats.totalPnl > 0 ? "+" : ""}${stats.totalPnl.toFixed(2)}`}
           </p>
           <p className="mt-1 text-[10px] text-muted-foreground">
-            $1 stake · win 1 / price · loss −1
+            $1 stake · win 1 / price − 1 · loss −1
           </p>
         </div>
         <div className="rounded-xl border border-border/70 bg-muted/40 px-4 py-3">

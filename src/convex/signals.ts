@@ -172,9 +172,9 @@ export const signalStats = query({
       if (row.outcome === "win") {
         wins += 1;
         const entryPrice = row.entryLimitPrice ?? row.maxEntryPrice;
-        // A $1 stake buys 1 / entryPrice contracts. A win returns that
-        // gross multiple; a loss loses the full $1 stake.
-        totalPnl += entryPrice > 0 ? 1 / entryPrice : 0;
+        // A $1 stake buys 1 / entryPrice contracts. Subtract the $1
+        // stake to report net profit rather than gross payout.
+        totalPnl += entryPrice > 0 ? 1 / entryPrice - 1 : 0;
       } else if (row.outcome === "loss") {
         losses += 1;
         totalPnl -= 1;
