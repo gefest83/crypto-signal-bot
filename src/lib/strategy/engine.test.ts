@@ -271,23 +271,66 @@ describe("evaluateSignal — максимальная цена входа", () =
     const price = candles[candles.length - 1].close;
     const readout = evaluate(candles, price, OPEN + 20_000)!;
 
-    if (readout.direction !== "stand-aside") {
-      const expected = Math.max(
-        MIN_ENTRY_PRICE,
-        Math.min(
-          MAX_ENTRY_PRICE,
-          Math.round((readout.estimatedProbability - EDGE_MARGIN_PP / 100) * 100) / 100,
-        ),
-      );
-      expect(readout.maxEntryPrice).toBeCloseTo(expected, 2);
-      // Регрессия на старую ошибку: гейт больше не строится из confidence и не
-      // может превысить PROB_CEIL − margin (старая формула доходила до 0.66).
+    // Сильный рост гарантированно публикует вызов, поэтому проверка не уходит
+    // в необязательную ветку и регрессия ловится всегда.
+    expect(readout.direction).toBe("up");
+
+    const expected = Math.max(
+      MIN_ENTRY_PRICE,
+      Math.min(
+        MAX_ENTRY_PRICE,
+        Math.round((readout.estimatedProbability - EDGE_MARGIN_PP / 100) * 100) / 100,
+      ),
+    );
+    expect(readout.maxEntryPrice).toBeCloseTo(expected, 2);
+    // Регрессия на старую ошибку: гейт больше не строится из confidence и не
+    // может превысить PROB_CEIL − margin (старая формула доходила до 0.66).
+    expect(readout.maxEntryPrice).toBeLessThanOrEqual(
+      Math.round((PROB_CEIL - EDGE_MARGIN_PP / 100) * 100) / 100,
+    );
+  });
+
+  it("насыщение силы сигнала не поднимает цену входа выше потолка", () => {
+    // Инвариант проверяется на наборе сценариев разной силы и разных фаз:
+    // как бы сильным ни был сигнал, гейт не может превысить PROB_CEIL − margin.
+    const scenarios: Array<() => ReturnType<typeof evaluate>> = [];
+    for (const count of [90, 150, 240]) {
+      for (const now of [OPEN + 10_000, OPEN + 90_000, OPEN + 200_000]) {
+        for (const build of [risingCandles, fallingCandles]) {
+          scenarios.push(() => {
+            const candles = build(count);
+            return evaluate(candles, candles[candles.length - 1].close, now);
+          });
+        }
+      }
+    }
+
+    let checkedCalls = 0;
+    for (const build of scenarios) {
+      const readout = build();
+      if (!readout) throw new Error("ожидался readout");
+      if (readout.direction === "stand-aside") {
+        expect(readout.maxEntryPrice).toBe(0);
+        continue;
+      }
+      checkedCalls += 1;
       expect(readout.maxEntryPrice).toBeLessThanOrEqual(
         Math.round((PROB_CEIL - EDGE_MARGIN_PP / 100) * 100) / 100,
       );
-    } else {
-      expect(readout.maxEntryPrice).toBe(0);
     }
+    expect(checkedCalls).toBeGreaterThan(0);
+  });
+
+  it("maxEntryPrice не зависит от agreement: одинаковый |score| — одинаковый гейт", () => {
+    // confidence растёт от agreement, maxEntryPrice — нет. Обе серии дают вызов,
+    // поэтому разница в confidence не должна двигать цену входа.
+    const up = evaluate(risingCandles(90), risingCandles(90)[89].close, OPEN + 20_000)!;
+    const down = evaluate(fallingCandles(90), fallingCandles(90)[89].close, OPEN + 20_000)!;
+
+    expect(up.direction).toBe("up");
+    expect(down.direction).toBe("down");
+    expect(Math.abs(up.score)).toBeCloseTo(Math.abs(down.score), 2);
+    expect(up.maxEntryPrice).toBeCloseTo(down.maxEntryPrice, 2);
   });
 
   it("для stand-aside цена входа всегда 0", () => {
