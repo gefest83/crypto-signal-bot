@@ -81,6 +81,7 @@ export function useSignalConsole(): SignalConsole {
         score: readout.score,
         confidence: readout.confidence,
         effectiveConfidence: readout.effectiveConfidence,
+        estimatedProbability: readout.estimatedProbability,
         maxEntryPrice: readout.maxEntryPrice,
         referencePrice: readout.referencePrice,
         regime: readout.regime,

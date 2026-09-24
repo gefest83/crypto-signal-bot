@@ -21,6 +21,7 @@ export const logSignal = mutation({
     score: v.number(),
     confidence: v.number(),
     effectiveConfidence: v.number(),
+    estimatedProbability: v.number(),
     maxEntryPrice: v.number(),
     referencePrice: v.number(),
     regime: v.string(),
