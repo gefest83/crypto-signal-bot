@@ -81,7 +81,7 @@ export function RoundHistory() {
           <h2 className="text-sm font-semibold tracking-tight">Журнал раундов</h2>
           <p className="mt-1 text-xs text-muted-foreground">
             Каждый вызов фиксируется один раз и оценивается по реальному закрытию
-            раунда.
+            раунда. P&L считается по сохранённому лимиту цены контракта.
           </p>
         </div>
         <AlertDialog>
@@ -114,7 +114,27 @@ export function RoundHistory() {
         </AlertDialog>
       </header>
 
-      <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-5">
+        <div className="rounded-xl border border-border/70 bg-muted/40 px-4 py-3">
+          <p className="text-[11px] tracking-wider text-muted-foreground uppercase">
+            Общий P&L
+          </p>
+          <p
+            className={cn(
+              "mt-1 font-mono text-2xl font-semibold tabular-nums",
+              (stats?.totalPnl ?? 0) >= 0 ? "text-up-ink" : "text-down-ink",
+            )}
+          >
+            {stats?.totalPnl === undefined
+              ? "—"
+              : `${stats.totalPnl > 0 ? "+" : ""}${stats.totalPnl.toFixed(2)}`}
+          </p>
+          <p className="mt-1 text-[10px] text-muted-foreground">
+            {stats?.pnlReturnPct === null || stats?.pnlReturnPct === undefined
+              ? "по лимиту входа"
+              : `${stats.pnlReturnPct > 0 ? "+" : ""}${stats.pnlReturnPct}% · по лимиту входа`}
+          </p>
+        </div>
         <div className="rounded-xl border border-border/70 bg-muted/40 px-4 py-3">
           <p className="text-[11px] tracking-wider text-muted-foreground uppercase">
             Точность

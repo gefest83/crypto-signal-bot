@@ -136,6 +136,8 @@ export const signalStats = query({
         losses: 0,
         ties: 0,
         pending: 0,
+        totalPnl: 0,
+        pnlReturnPct: null as number | null,
         winRate: null as number | null,
         lastResults: [] as ("win" | "loss" | "tie")[],
       };
@@ -160,6 +162,8 @@ export const signalStats = query({
     let losses = 0;
     let ties = 0;
     let pending = 0;
+    let totalPnl = 0;
+    let totalEntryValue = 0;
     const lastResults: ("win" | "loss" | "tie")[] = [];
 
     for (const row of rows) {
@@ -167,9 +171,19 @@ export const signalStats = query({
         pending += 1;
         continue;
       }
-      if (row.outcome === "win") wins += 1;
-      else if (row.outcome === "loss") losses += 1;
-      else ties += 1;
+      if (row.outcome === "win") {
+        wins += 1;
+        const entryPrice = row.entryLimitPrice ?? row.maxEntryPrice;
+        totalEntryValue += entryPrice;
+        totalPnl += 1 - entryPrice;
+      } else if (row.outcome === "loss") {
+        losses += 1;
+        const entryPrice = row.entryLimitPrice ?? row.maxEntryPrice;
+        totalEntryValue += entryPrice;
+        totalPnl -= entryPrice;
+      } else {
+        ties += 1;
+      }
       if (lastResults.length < 50) lastResults.push(row.outcome);
     }
 
@@ -183,6 +197,11 @@ export const signalStats = query({
       losses,
       ties,
       pending,
+      totalPnl: Math.round(totalPnl * 100) / 100,
+      pnlReturnPct:
+        totalEntryValue === 0
+          ? null
+          : Math.round((totalPnl / totalEntryValue) * 1000) / 10,
       winRate: decisive === 0 ? null : Math.round((wins / decisive) * 1000) / 10,
       lastResults,
     };
