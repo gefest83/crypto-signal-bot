@@ -26,8 +26,13 @@ export const ENTRY_CUTOFF_MS = 150_000;
 
 /** Minimum absolute score required to publish a directional call. */
 export const MIN_SCORE = 0.22;
+/** Do not chase a fully saturated impulse: it is often an exhausted move. */
+export const MAX_ENTRY_SCORE = 0.6;
 /** Minimum confidence (before phase decay) required to publish a call. */
-export const MIN_CONFIDENCE = 60;
+export const MIN_CONFIDENCE = 55;
+/** Factor agreement required for a precision entry, not just a directional lean. */
+export const MIN_FACTOR_AGREEMENT = 0.55;
+export const MIN_ALIGNED_FACTORS = 4;
 /** Margin we insist on between our estimated probability and the contract entry price. */
 export const EDGE_MARGIN_PP = 6;
 
@@ -102,6 +107,8 @@ export type SignalReadout = {
   rsi: number;
   /** Highest contract price at which the call still has a positive edge. */
   maxEntryPrice: number;
+  /** True only for a precision-qualified, early-phase call. */
+  entryEligible: boolean;
   notes: string[];
   evaluatedAt: number;
 };
@@ -401,8 +408,19 @@ export function evaluateSignal({
   const phaseMultiplier = phase === "early" ? 1 : phase === "mid" ? 0.82 : 0.58;
   const effectiveConfidence = clamp(confidence * phaseMultiplier, 0, 72);
 
-  const qualified = Math.abs(score) >= MIN_SCORE && confidence >= MIN_CONFIDENCE;
-  const direction: Direction = qualified
+  const alignedFactors = factors.filter(
+    (f) => Math.sign(f.value) === directionSign && Math.abs(f.value) >= 0.05,
+  );
+  const precisionQualified =
+    Math.abs(score) >= MIN_SCORE &&
+    Math.abs(score) <= MAX_ENTRY_SCORE &&
+    confidence >= MIN_CONFIDENCE &&
+    agreement >= MIN_FACTOR_AGREEMENT &&
+    alignedFactors.length >= MIN_ALIGNED_FACTORS &&
+    active.length >= 4 &&
+    regime === "normal";
+
+  const direction: Direction = precisionQualified
     ? score > 0
       ? "up"
       : "down"
@@ -423,6 +441,7 @@ export function evaluateSignal({
           MIN_ENTRY_PRICE,
           MAX_ENTRY_PRICE,
         );
+  const entryEligible = direction !== "stand-aside" && phase === "early";
 
   const roundPnlPct =
     referencePrice === 0 ? 0 : ((price - referencePrice) / referencePrice) * 100;
@@ -439,13 +458,11 @@ export function evaluateSignal({
 
   if (direction === "stand-aside") {
     notes.push(
-      `Перевес ${signed(score)} ниже порога ${MIN_SCORE.toFixed(2)} — раунд пропускаем.`,
+      `Precision-фильтр: ${alignedFactors.length}/6 факторов подтверждают направление; раунд пропускаем.`,
     );
   } else {
     notes.push(
-      `Согласие факторов ${Math.round((agreement + 1) * 50)}% · вес ${Math.round(
-        activeWeight * 100,
-      )}% от общего голоса.`,
+      `Согласие факторов ${Math.round((agreement + 1) * 50)}% · подтверждено ${alignedFactors.length}/6 · режим normal.`, 
     );
   }
 
@@ -485,6 +502,7 @@ export function evaluateSignal({
     atrPct: atr,
     rsi: rsiValue,
     maxEntryPrice,
+    entryEligible,
     notes,
     evaluatedAt: now,
   };

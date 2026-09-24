@@ -396,13 +396,13 @@ export function SignalHero({
             <ShieldAlert className="size-4 shrink-0 text-muted-foreground" />
             <div className="min-w-0">
               <p className="text-[11px] font-medium tracking-wider text-muted-foreground uppercase">
-                Макс. цена входа
+                Макс. цена входа · только early
               </p>
               <p className="font-mono text-lg tabular-nums">
                 {call ? call.maxEntryPrice.toFixed(2) : "—"}
                 {call ? (
                   <span className="ms-2 text-xs text-muted-foreground">
-                    оценка вероятности {Math.round(call.estimatedProbability * 100)}% − 6 п.п.
+                    оценка вероятности {Math.round(call.estimatedProbability * 100)}% − 6 п.п. · фактический ask не подключён
                   </span>
                 ) : null}
               </p>

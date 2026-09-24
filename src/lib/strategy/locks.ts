@@ -10,7 +10,7 @@
 import type { MarketSymbol } from "@/lib/market/types";
 import { MARKET_SYMBOLS } from "@/lib/market/types";
 import type { SignalReadout } from "./engine";
-import { ENTRY_CUTOFF_MS } from "./engine";
+
 
 export type LocksMap = Partial<Record<MarketSymbol, SignalReadout>>;
 
@@ -50,8 +50,9 @@ export function nextLocks(
       next[symbol] = existing;
       continue;
     }
-    // New round: only a call published before the entry cutoff can be locked.
-    if (readout.direction !== "stand-aside" && readout.elapsedMs < ENTRY_CUTOFF_MS) {
+    // New round: only a precision-qualified call in the opening window can be
+    // locked. A mid-round directional lean is intentionally not a trade.
+    if (readout.entryEligible && readout.direction !== "stand-aside") {
       next[symbol] = readout;
       // Re-assert the narrowed direction so the journal gets "up" | "down".
       lockedCalls.push({ ...readout, direction: readout.direction });

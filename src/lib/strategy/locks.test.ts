@@ -35,6 +35,8 @@ function readout(overrides: Partial<SignalReadout> = {}): SignalReadout {
     atrPct: 0.0008,
     rsi: 55,
     maxEntryPrice: 0.59,
+    entryEligible: true,
+
     notes: [],
     evaluatedAt: WIN_A + 20_000,
     ...overrides,
@@ -64,24 +66,36 @@ describe("nextLocks — базовые правила", () => {
   });
 
   it("не лочит вызов после отсечки 150с", () => {
-    const late = readout({ elapsedMs: ENTRY_CUTOFF_MS, phase: "late" });
+    const late = readout({
+      elapsedMs: ENTRY_CUTOFF_MS,
+      phase: "late",
+      entryEligible: false,
+    });
     const { locks, lockedCalls } = nextLocks({}, { [BTC]: late });
     expect(locks[BTC]).toBeUndefined();
     expect(lockedCalls).toEqual([]);
   });
 
-  it("лочит на последней секунде перед отсечкой (граница <)", () => {
-    const almostLate = readout({ elapsedMs: ENTRY_CUTOFF_MS - 1 });
+  it("не лочит вызов после первой минуты", () => {
+    const almostLate = readout({
+      elapsedMs: ENTRY_WINDOW_MS,
+      phase: "mid",
+      entryEligible: false,
+    });
     const { locks, lockedCalls } = nextLocks({}, { [BTC]: almostLate });
-    expect(locks[BTC]).toBe(almostLate);
-    expect(lockedCalls.map((call) => call.symbol)).toEqual([BTC]);
+    expect(locks[BTC]).toBeUndefined();
+    expect(lockedCalls).toEqual([]);
   });
 
-  it("лочит в mid-фазе (60–150с) — окно входа закрыто, но лок возможен", () => {
-    const mid = readout({ elapsedMs: 100_000, phase: "mid" });
+  it("не лочит вызов в mid-фазе даже при направленном движении", () => {
+    const mid = readout({
+      elapsedMs: 100_000,
+      phase: "mid",
+      entryEligible: false,
+    });
     const { locks, lockedCalls } = nextLocks({}, { [BTC]: mid });
-    expect(locks[BTC]).toBe(mid);
-    expect(lockedCalls.map((call) => call.symbol)).toEqual([BTC]);
+    expect(locks[BTC]).toBeUndefined();
+    expect(lockedCalls).toEqual([]);
   });
 
   it("лочит down-вызовы так же, как up", () => {

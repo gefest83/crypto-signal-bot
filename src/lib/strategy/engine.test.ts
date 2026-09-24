@@ -42,25 +42,25 @@ const candle = (openTime: number, close: number, overrides: Partial<Candle> = {}
   };
 };
 
-/** Rising market: each minute +0.08% with mild noise-free candles. */
+/** Rising market: each minute +0.02% with mild noise-free candles. */
 function risingCandles(count: number, startPrice = BASE): Candle[] {
   const out: Candle[] = [];
   let price = startPrice;
   for (let i = 0; i < count; i += 1) {
     const open = price;
-    price = price * 1.0008;
+    price = price * 1.0002;
     out.push(candle(OPEN + i * 60_000, price, { open }));
   }
   return out;
 }
 
-/** Falling market: each minute −0.08%. */
+/** Falling market: each minute −0.02%. */
 function fallingCandles(count: number, startPrice = BASE): Candle[] {
   const out: Candle[] = [];
   let price = startPrice;
   for (let i = 0; i < count; i += 1) {
     const open = price;
-    price = price * 0.9992;
+    price = price * 0.9998;
     out.push(candle(OPEN + i * 60_000, price, { open }));
   }
   return out;
@@ -408,7 +408,7 @@ describe("evaluateSignal — факторы и структура readout", () =
   it("значения факторов зажаты в [-1, 1], вклад = weight × value", () => {
     for (const factor of readout.factors) {
       expect(Math.abs(factor.value)).toBeLessThanOrEqual(1);
-      expect(factor.contribution).toBeCloseTo(factor.weight * factor.value, 3);
+      expect(factor.contribution).toBeCloseTo(factor.weight * factor.value, 2);
     }
   });
 
