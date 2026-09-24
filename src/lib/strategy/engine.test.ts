@@ -8,6 +8,7 @@ import {
   ENTRY_WINDOW_MS,
   evaluateSignal,
   MAX_ENTRY_PRICE,
+  MAX_ENTRY_SCORE,
   MIN_CONFIDENCE,
   MIN_ENTRY_PRICE,
   MIN_SCORE,
@@ -159,6 +160,38 @@ describe("evaluateSignal — пороги публикации", () => {
     expect(readout?.direction).toBe("down");
     expect(readout!.score).toBeLessThanOrEqual(-MIN_SCORE);
     expect(readout!.confidence).toBeGreaterThanOrEqual(MIN_CONFIDENCE);
+  });
+
+  it("не публикует перегретый score выше рабочей полосы", () => {
+    const candles = risingCandles(90).map((row, index) => {
+      const open = BASE * 1.0004 ** index;
+      const close = BASE * 1.0004 ** (index + 1);
+      return {
+        ...row,
+        open,
+        close,
+        high: Math.max(open, close) * 1.0004,
+        low: Math.min(open, close) * 0.9996,
+      };
+    });
+    const readout = evaluate(candles, candles[candles.length - 1].close, OPEN + 20_000)!;
+
+    expect(Math.abs(readout.score)).toBeGreaterThan(MAX_ENTRY_SCORE);
+    expect(readout.direction).toBe("stand-aside");
+    expect(readout.maxEntryPrice).toBe(0);
+  });
+
+  it("не публикует тот же импульс после закрытия early-окна", () => {
+    const candles = risingCandles(90);
+    const readout = evaluate(
+      candles,
+      candles[candles.length - 1].close,
+      OPEN + ENTRY_WINDOW_MS,
+    )!;
+
+    expect(readout.phase).toBe("mid");
+    expect(readout.direction).toBe("stand-aside");
+    expect(readout.maxEntryPrice).toBe(0);
   });
 
   it("флэт → stand-aside: score ниже порога", () => {

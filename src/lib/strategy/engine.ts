@@ -26,12 +26,16 @@ export const ENTRY_CUTOFF_MS = 150_000;
 
 /** Minimum absolute score required to publish a directional call. */
 export const MIN_SCORE = 0.22;
-/** Do not chase a fully saturated impulse: it is often an exhausted move. */
-export const MAX_ENTRY_SCORE = 0.6;
+/**
+ * Do not chase a saturated impulse. The historical calibration showed the
+ * largest six-factor scores were less reliable, so the live gate keeps a
+ * moderate band instead of treating a large move as extra confidence.
+ */
+export const MAX_ENTRY_SCORE = 0.4;
 /** Minimum confidence (before phase decay) required to publish a call. */
 export const MIN_CONFIDENCE = 55;
 /** Factor agreement required for a precision entry, not just a directional lean. */
-export const MIN_FACTOR_AGREEMENT = 0.55;
+export const MIN_FACTOR_AGREEMENT = 0.7;
 export const MIN_ALIGNED_FACTORS = 4;
 /** Margin we insist on between our estimated probability and the contract entry price. */
 export const EDGE_MARGIN_PP = 6;
@@ -412,6 +416,7 @@ export function evaluateSignal({
     (f) => Math.sign(f.value) === directionSign && Math.abs(f.value) >= 0.05,
   );
   const precisionQualified =
+    phase === "early" &&
     Math.abs(score) >= MIN_SCORE &&
     Math.abs(score) <= MAX_ENTRY_SCORE &&
     confidence >= MIN_CONFIDENCE &&
@@ -462,7 +467,7 @@ export function evaluateSignal({
     );
   } else {
     notes.push(
-      `Согласие факторов ${Math.round((agreement + 1) * 50)}% · подтверждено ${alignedFactors.length}/6 · режим normal.`, 
+        `Согласие факторов ${Math.round((agreement + 1) * 50)}% · подтверждено ${alignedFactors.length}/6 · режим normal.`, 
     );
   }
 
