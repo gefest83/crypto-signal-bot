@@ -9,7 +9,7 @@ import {
 } from "@/lib/market/types";
 import {
   evaluateSignal,
-  ENTRY_CUTOFF_MS,
+  ENTRY_WINDOW_MS,
   type SignalReadout,
 } from "@/lib/strategy/engine";
 import { nextLocks } from "@/lib/strategy/locks";
@@ -137,7 +137,9 @@ export function useSignalConsole(): SignalConsole {
       const readout = readouts[symbol];
       if (locks[symbol]) map[symbol] = "locked";
       else if (!readout) map[symbol] = "warming";
-      else if (readout.elapsedMs >= ENTRY_CUTOFF_MS) map[symbol] = "closed";
+      // Once the confirmation window shuts, the round is a skip — it should read
+      // as a deliberate decision, not as "still scanning".
+      else if (readout.elapsedMs >= ENTRY_WINDOW_MS) map[symbol] = "closed";
       else map[symbol] = "scanning";
     }
     return map;

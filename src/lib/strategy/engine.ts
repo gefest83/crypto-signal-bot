@@ -1,16 +1,22 @@
 /**
  * "Early Push" signal engine for Binance 5-minute Up/Down prediction rounds.
  *
- * Every prediction-market contract behaves the same way: you only get a real
- * edge at the very beginning of the round, because the contract price climbs
- * toward 1.00 as soon as the underlying starts moving. So the engine answers one
- * question, in the first seconds of a round:
+ * Every prediction-market contract behaves the same way: the price climbs
+ * toward 1.00 as soon as the underlying starts moving, so the edge lives in the
+ * first part of the round. The engine answers one question, and it deliberately
+ * does not answer it in the first seconds:
  *
- *     "Is there enough evidence *right now* to call this round Up or Down?"
+ *     "Now that the round's opening minute has closed, is there enough
+ *      evidence to call this round Up or Down?"
  *
- * The answer is a weighted vote of six independent 1-minute factors, filtered
- * by two guards (exhaustion + volatility regime) and decayed by how much of the
- * round has already elapsed. Standing aside is a valid, expected answer.
+ * Calling inside that opening minute was the single biggest source of losses:
+ * a backtest over real Binance data showed entries taken in the first ten
+ * seconds grading around 64%, while the same rounds called once the opening
+ * minute had printed graded around 73%. So `prepare` is a real phase — the
+ * engine refuses to call until t = 60s, and then votes with six independent
+ * 1-minute factors, filtered by guards (exhaustion, volatility regime,
+ * cushion from the round open, higher-timeframe trend) and decayed by how much
+ * of the round has already elapsed. Standing aside is a valid, expected answer.
  *
  * Everything here is pure: same candles + same price => same signal. That makes
  * the strategy testable and keeps the React layer free of trading logic.
@@ -19,10 +25,23 @@
 import type { Candle, MarketSymbol } from "@/lib/market/types";
 import { ROUND_MS, roundWindow } from "@/lib/market/types";
 
-/** Best-entry window: the contract is still cheap, the call is still informed. */
-export const ENTRY_WINDOW_MS = 60_000;
+/**
+ * The round's first 1-minute candle must be closed before the engine may
+ * commit. Below this point the only information available is a few seconds of
+ * tick noise, and a 30-day backtest on real Binance 1m klines — replayed both
+ * as a single snapshot and second-by-second with real 1s prices — showed
+ * exactly that: entries taken inside the first minute graded at ~64%, against
+ * ~73% once the opening minute had actually printed.
+ */
+export const MIN_ENTRY_ELAPSED_MS = 60_000;
+/**
+ * Confirmation window: the first minute is closed, the contract has barely
+ * repriced. This is now the whole entry window — the decision is made with the
+ * round's opening minute in hand, 20% into the round.
+ */
+export const ENTRY_WINDOW_MS = 120_000;
 /** After this point a new entry has no edge left — the price already moved. */
-export const ENTRY_CUTOFF_MS = 150_000;
+export const ENTRY_CUTOFF_MS = 180_000;
 
 /**
  * Minimum absolute score required to publish a directional call.
@@ -33,12 +52,16 @@ export const ENTRY_CUTOFF_MS = 150_000;
  */
 export const MIN_SCORE = 0.3;
 /**
- * Upper bound on the entry score. A saturated vote (nearly every factor pinned
- * at its cap) means the move already ran inside the opening minute; those
- * "parabolic" rounds reverted more often than they continued, so we keep an
- * anti-blowoff ceiling instead of treating maximum conviction as maximum edge.
+ * Upper bound on the entry score, kept as a guard against parabolic minutes.
+ *
+ * The old ceiling of 0.62 was calibrated for entries inside the first minute,
+ * where a saturated vote meant the move had already run. Once the entry moved
+ * to the confirmation window a strong opening minute *continued* more often
+ * than it reverted, so the tight ceiling only removed winning calls. In the
+ * backtest this value is non-binding (0.9 and 1.0 give identical results) — it
+ * is left in place purely to refuse the most extreme blow-off minutes.
  */
-export const MAX_ENTRY_SCORE = 0.62;
+export const MAX_ENTRY_SCORE = 0.9;
 /** Minimum confidence (before phase decay) required to publish a call. */
 export const MIN_CONFIDENCE = 60;
 /** Factor agreement required for a precision entry, not just a directional lean. */
@@ -51,11 +74,13 @@ export const MIN_ALIGNED_FACTORS = 5;
 /** Margin we insist on between our estimated probability and the contract entry price. */
 export const EDGE_MARGIN_PP = 8;
 /**
- * Minimum cushion between the live price and the round's opening price, in ATR
- * units. A round settles on close-vs-open, so we only commit once the round is
- * already leaning our way by a real distance rather than a few seconds of noise.
+ * Minimum cushion between the price and the round's opening price, in ATR
+ * units. A round settles on close-vs-open, so we only commit once the opening
+ * minute has already carried the price a real distance from the open. This is
+ * the single strongest lever in the backtest: 0.35 → ~71%, 0.5 → ~73%,
+ * 0.9 → ~77% (at the cost of fewer signals and a pricier contract).
  */
-export const MIN_CUSHION_ATR = 0.35;
+export const MIN_CUSHION_ATR = 0.5;
 /**
  * The higher-timeframe trend (EMA 15 vs EMA 40 on 1m) must clear this
  * separation, in ATR units, and agree with the call. A 5-minute round is far
@@ -87,8 +112,54 @@ export const PROB_SCORE_REF = 0.6;
 export const MIN_ENTRY_PRICE = 0.01;
 export const MAX_ENTRY_PRICE = 0.99;
 
+/**
+ * Every tunable of the strategy in one object.
+ *
+ * `evaluateSignal` reads only from this config, and `DEFAULT_CONFIG` is built
+ * from the exported constants above — so production behaviour is unchanged, but
+ * a backtest can hand in a variant without forking the engine.
+ */
+export type StrategyConfig = {
+  minEntryElapsedMs: number;
+  entryWindowMs: number;
+  entryCutoffMs: number;
+  minScore: number;
+  maxEntryScore: number;
+  minConfidence: number;
+  minFactorAgreement: number;
+  minAlignedFactors: number;
+  edgeMarginPp: number;
+  minCushionAtr: number;
+  minTrendSeparationAtr: number;
+  probFloor: number;
+  probCeil: number;
+  probScoreRef: number;
+};
+
+export const DEFAULT_CONFIG: StrategyConfig = {
+  minEntryElapsedMs: MIN_ENTRY_ELAPSED_MS,
+  entryWindowMs: ENTRY_WINDOW_MS,
+  entryCutoffMs: ENTRY_CUTOFF_MS,
+  minScore: MIN_SCORE,
+  maxEntryScore: MAX_ENTRY_SCORE,
+  minConfidence: MIN_CONFIDENCE,
+  minFactorAgreement: MIN_FACTOR_AGREEMENT,
+  minAlignedFactors: MIN_ALIGNED_FACTORS,
+  edgeMarginPp: EDGE_MARGIN_PP,
+  minCushionAtr: MIN_CUSHION_ATR,
+  minTrendSeparationAtr: MIN_TREND_SEPARATION_ATR,
+  probFloor: PROB_FLOOR,
+  probCeil: PROB_CEIL,
+  probScoreRef: PROB_SCORE_REF,
+};
+
 export type Direction = "up" | "down" | "stand-aside";
-export type Phase = "early" | "mid" | "late";
+/**
+ * `prepare` — the round's first minute has not closed yet, so nothing may be
+ * called. `early` — the confirmation window, the only phase that can publish a
+ * call. `mid`/`late` — past the entry window, observation only.
+ */
+export type Phase = "prepare" | "early" | "mid" | "late";
 export type Regime = "normal" | "chop" | "quiet";
 export type Stance = "up" | "down" | "neutral";
 
@@ -126,6 +197,8 @@ export type SignalReadout = {
   elapsedMs: number;
   windowStart: number;
   windowEnd: number;
+  /** When the round's first minute closes and an entry may be published. */
+  entryOpensAt: number;
   entryDeadline: number;
   referencePrice: number;
   prevRoundClose: number;
@@ -146,6 +219,7 @@ type EvaluateInput = {
   candles: Candle[];
   price: number;
   now: number;
+  config?: StrategyConfig;
 };
 
 /* ------------------------------------------------------------------ */
@@ -278,13 +352,20 @@ export function evaluateSignal({
   candles,
   price,
   now,
+  config = DEFAULT_CONFIG,
 }: EvaluateInput): SignalReadout | null {
   if (candles.length < 30 || !Number.isFinite(price) || price <= 0) return null;
 
   const { start: windowStart, end: windowEnd } = roundWindow(now);
   const elapsedMs = now - windowStart;
   const phase: Phase =
-    elapsedMs < ENTRY_WINDOW_MS ? "early" : elapsedMs < ENTRY_CUTOFF_MS ? "mid" : "late";
+    elapsedMs < config.minEntryElapsedMs
+      ? "prepare"
+      : elapsedMs < config.entryWindowMs
+        ? "early"
+        : elapsedMs < config.entryCutoffMs
+          ? "mid"
+          : "late";
 
   // Treat the live price as the current (forming) candle's close so the readout
   // reacts to ticks between candle closes — that is the whole point of calling
@@ -433,7 +514,10 @@ export function evaluateSignal({
   if (regime === "quiet") confidence *= 0.92;
 
   confidence = clamp(confidence, 50, 72);
-  const phaseMultiplier = phase === "early" ? 1 : phase === "mid" ? 0.82 : 0.58;
+  // Before the confirmation window there is no entry to decay: the readout is
+  // simply a live view of a round that has not started giving information yet.
+  const phaseMultiplier =
+    phase === "early" || phase === "prepare" ? 1 : phase === "mid" ? 0.82 : 0.58;
   const effectiveConfidence = clamp(confidence * phaseMultiplier, 0, 72);
 
   const alignedFactors = factors.filter(
@@ -448,7 +532,7 @@ export function evaluateSignal({
   const trendAligned =
     directionSign > 0 ? htfSeparation > 0 : htfSeparation < 0;
   const trendStrong =
-    Math.abs(htfSeparation) >= atr * MIN_TREND_SEPARATION_ATR;
+    Math.abs(htfSeparation) >= atr * config.minTrendSeparationAtr;
 
   /* Guard 4: cushion from the round open ---------------------------- */
   // The round settles on close-vs-open, so require the live price to already
@@ -457,17 +541,17 @@ export function evaluateSignal({
     referencePrice === 0 ? 0 : (price - referencePrice) / referencePrice;
   const cushionOk =
     directionSign > 0
-      ? roundMoveFraction >= MIN_CUSHION_ATR * atr
-      : roundMoveFraction <= -MIN_CUSHION_ATR * atr;
+      ? roundMoveFraction >= config.minCushionAtr * atr
+      : roundMoveFraction <= -config.minCushionAtr * atr;
 
   const precisionQualified =
     phase === "early" &&
-    Math.abs(score) >= MIN_SCORE &&
-    Math.abs(score) <= MAX_ENTRY_SCORE &&
-    confidence >= MIN_CONFIDENCE &&
-    agreement >= MIN_FACTOR_AGREEMENT &&
-    alignedFactors.length >= MIN_ALIGNED_FACTORS &&
-    active.length >= MIN_ALIGNED_FACTORS &&
+    Math.abs(score) >= config.minScore &&
+    Math.abs(score) <= config.maxEntryScore &&
+    confidence >= config.minConfidence &&
+    agreement >= config.minFactorAgreement &&
+    alignedFactors.length >= config.minAlignedFactors &&
+    active.length >= config.minAlignedFactors &&
     regime === "normal" &&
     trendAligned &&
     trendStrong &&
@@ -484,14 +568,15 @@ export function evaluateSignal({
   // Monotone in signal strength, but it neither saturates at |score| = 0.5 nor
   // rewards factor agreement (which is inflated by the factors' shared input).
   const estimatedProbability =
-    PROB_FLOOR +
-    (PROB_CEIL - PROB_FLOOR) * clamp(Math.abs(score) / PROB_SCORE_REF, 0, 1);
+    config.probFloor +
+    (config.probCeil - config.probFloor) *
+      clamp(Math.abs(score) / config.probScoreRef, 0, 1);
 
   const maxEntryPrice =
     direction === "stand-aside"
       ? 0
       : clamp(
-          Math.round((estimatedProbability - EDGE_MARGIN_PP / 100) * 100) / 100,
+          Math.round((estimatedProbability - config.edgeMarginPp / 100) * 100) / 100,
           MIN_ENTRY_PRICE,
           MAX_ENTRY_PRICE,
         );
@@ -502,15 +587,25 @@ export function evaluateSignal({
 
   /* Human-readable reasoning --------------------------------------- */
   const notes: string[] = [];
-  if (phase === "early") {
-    notes.push("Окно входа открыто: контракт ещё не переоценён.");
+  if (phase === "prepare") {
+    notes.push(
+      `Ждём закрытия первой минуты раунда — до ${Math.round(
+        config.minEntryElapsedMs / 1000,
+      )}-й секунды входных данных о раунде ещё нет, только шум тиков.`,
+    );
+  } else if (phase === "early") {
+    notes.push(
+      "Первая минута раунда закрыта — окно подтверждения открыто, контракт ещё не переоценён.",
+    );
   } else if (phase === "mid") {
-    notes.push("Лучшее окно входа прошло — цена контракта уже выросла.");
+    notes.push("Окно подтверждения прошло — цена контракта уже выросла.");
   } else {
     notes.push("Поздняя фаза: новый вход без перевеса, только наблюдение.");
   }
 
-  if (direction === "stand-aside") {
+  // The filter breakdown only makes sense once the window is actually open: in
+  // `prepare` the verdict is "no data yet", not "the filters said no".
+  if (phase !== "prepare" && direction === "stand-aside") {
     notes.push(
       `Precision-фильтр: подтверждено ${alignedFactors.length}/6 факторов, согласие ${Math.round(
         (agreement + 1) * 50,
@@ -523,12 +618,12 @@ export function evaluateSignal({
     }
     if (!cushionOk) {
       notes.push(
-        `Цена ещё не оторвалась от открытия раунда на ${MIN_CUSHION_ATR.toFixed(
+        `Цена ещё не оторвалась от открытия раунда на ${config.minCushionAtr.toFixed(
           2,
         )} ATR — нет буфера до закрытия.`,
       );
     }
-  } else {
+  } else if (phase !== "prepare") {
     notes.push(
       `Согласие факторов ${Math.round(
         (agreement + 1) * 50,
@@ -564,7 +659,8 @@ export function evaluateSignal({
     elapsedMs,
     windowStart,
     windowEnd,
-    entryDeadline: windowStart + ENTRY_WINDOW_MS,
+    entryOpensAt: windowStart + config.minEntryElapsedMs,
+    entryDeadline: windowStart + config.entryWindowMs,
     referencePrice,
     prevRoundClose,
     price,

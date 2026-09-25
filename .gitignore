@@ -2,3 +2,6 @@
 node_modules
 dist
 src/convex/_generated
+
+# Cached Binance klines for scripts/backtest-strategy.ts
+scripts/.cache/

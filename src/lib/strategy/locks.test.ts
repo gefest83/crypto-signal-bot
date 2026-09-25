@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import { MARKET_SYMBOLS } from "@/lib/market/types";
 import type { SignalReadout } from "./engine";
-import { ENTRY_CUTOFF_MS, ENTRY_WINDOW_MS } from "./engine";
+import {
+  ENTRY_CUTOFF_MS,
+  ENTRY_WINDOW_MS,
+  MIN_ENTRY_ELAPSED_MS,
+} from "./engine";
 import { nextLocks } from "./locks";
 
 /* ------------------------------------------------------------------ */
@@ -24,9 +28,10 @@ function readout(overrides: Partial<SignalReadout> = {}): SignalReadout {
     regime: "normal",
     volatilityRatio: 1,
     phase: "early",
-    elapsedMs: 20_000,
+    elapsedMs: MIN_ENTRY_ELAPSED_MS + 5_000,
     windowStart: WIN_A,
     windowEnd: WIN_A + 300_000,
+    entryOpensAt: WIN_A + MIN_ENTRY_ELAPSED_MS,
     entryDeadline: WIN_A + ENTRY_WINDOW_MS,
     referencePrice: 65_000,
     prevRoundClose: 64_900,
@@ -38,7 +43,7 @@ function readout(overrides: Partial<SignalReadout> = {}): SignalReadout {
     entryEligible: true,
 
     notes: [],
-    evaluatedAt: WIN_A + 20_000,
+    evaluatedAt: WIN_A + MIN_ENTRY_ELAPSED_MS + 5_000,
     ...overrides,
   };
 }
@@ -65,7 +70,7 @@ describe("nextLocks — базовые правила", () => {
     expect(lockedCalls).toEqual([]);
   });
 
-  it("не лочит вызов после отсечки 150с", () => {
+  it("не лочит вызов после отсечки 180с", () => {
     const late = readout({
       elapsedMs: ENTRY_CUTOFF_MS,
       phase: "late",
@@ -76,7 +81,7 @@ describe("nextLocks — базовые правила", () => {
     expect(lockedCalls).toEqual([]);
   });
 
-  it("не лочит вызов после первой минуты", () => {
+  it("не лочит вызов после закрытия окна подтверждения", () => {
     const almostLate = readout({
       elapsedMs: ENTRY_WINDOW_MS,
       phase: "mid",
@@ -87,15 +92,32 @@ describe("nextLocks — базовые правила", () => {
     expect(lockedCalls).toEqual([]);
   });
 
+  it("не лочит вызов до закрытия первой минуты (prepare)", () => {
+    const preparing = readout({
+      elapsedMs: 20_000,
+      phase: "prepare",
+      entryEligible: false,
+      maxEntryPrice: 0,
+    });
+    const { locks, lockedCalls } = nextLocks({}, { [BTC]: preparing });
+    expect(locks[BTC]).toBeUndefined();
+    expect(lockedCalls).toEqual([]);
+  });
+
   it("не лочит вызов в mid-фазе даже при направленном движении", () => {
     const mid = readout({
-      elapsedMs: 100_000,
+      elapsedMs: 150_000,
       phase: "mid",
       entryEligible: false,
     });
     const { locks, lockedCalls } = nextLocks({}, { [BTC]: mid });
     expect(locks[BTC]).toBeUndefined();
     expect(lockedCalls).toEqual([]);
+  });
+
+  it("в локе всегда сохраняется фаза early (её и ждёт схема журнала)", () => {
+    const { lockedCalls } = nextLocks({}, { [BTC]: readout() });
+    expect(lockedCalls[0].phase).toBe("early");
   });
 
   it("лочит down-вызовы так же, как up", () => {
@@ -149,7 +171,7 @@ describe("nextLocks — новый раунд", () => {
     const fresh = readout({
       windowStart: WIN_B,
       windowEnd: WIN_B + 300_000,
-      evaluatedAt: WIN_B + 15_000,
+      evaluatedAt: WIN_B + 75_000,
     });
 
     const { locks, lockedCalls } = nextLocks({ [BTC]: old }, { [BTC]: fresh });

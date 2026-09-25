@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { Candle, MarketSymbol } from "@/lib/market/types";
 import { ROUND_MS, roundWindow } from "@/lib/market/types";
 import {
+  DEFAULT_CONFIG,
   EDGE_MARGIN_PP,
   ENTRY_CUTOFF_MS,
   ENTRY_WINDOW_MS,
@@ -10,6 +11,7 @@ import {
   MAX_ENTRY_PRICE,
   MAX_ENTRY_SCORE,
   MIN_CONFIDENCE,
+  MIN_ENTRY_ELAPSED_MS,
   MIN_ENTRY_PRICE,
   MIN_SCORE,
   PROB_CEIL,
@@ -117,6 +119,13 @@ function evaluate(candles: Candle[], price: number, now: number, symbol: MarketS
   return evaluateSignal({ symbol, candles, price, now });
 }
 
+/**
+ * A moment inside the confirmation window: the round's first minute has closed
+ * (t ≥ 60s) but the entry window is still open (t < 120s). Publishable calls
+ * only exist here.
+ */
+const IN_WINDOW = OPEN + 75_000;
+
 /* ------------------------------------------------------------------ */
 /* engine tests                                                        */
 /* ------------------------------------------------------------------ */
@@ -158,10 +167,14 @@ describe("evaluateSignal — окна раундов", () => {
 
   it("elapsedMs соответствует переданному времени", () => {
     const candles = flatCandles(60);
-    const now = OPEN + 42_000;
-    const readout = evaluate(candles, BASE, now);
+    const readout = evaluate(candles, BASE, OPEN + 42_000);
     expect(readout?.elapsedMs).toBe(42_000);
-    expect(readout?.phase).toBe("early");
+    // Первая минута ещё не закрылась — входных данных о раунде нет.
+    expect(readout?.phase).toBe("prepare");
+
+    const confirmed = evaluate(candles, BASE, IN_WINDOW);
+    expect(confirmed?.elapsedMs).toBe(75_000);
+    expect(confirmed?.phase).toBe("early");
   });
 });
 
@@ -169,8 +182,7 @@ describe("evaluateSignal — пороги публикации", () => {
   it("сильный рост публикует UP с score ≥ MIN_SCORE и уверенностью ≥ MIN_CONFIDENCE", () => {
     const candles = risingCandles(90);
     const price = candles[candles.length - 1].close;
-    const now = OPEN + 25_000; // ранняя фаза
-    const readout = evaluate(candles, price, now);
+    const readout = evaluate(candles, price, IN_WINDOW);
 
     expect(readout?.direction).toBe("up");
     expect(Math.abs(readout!.score)).toBeGreaterThanOrEqual(MIN_SCORE);
@@ -181,21 +193,33 @@ describe("evaluateSignal — пороги публикации", () => {
   it("сильное падение публикует DOWN", () => {
     const candles = fallingCandles(90);
     const price = candles[candles.length - 1].close;
-    const now = OPEN + 25_000;
-    const readout = evaluate(candles, price, now);
+    const readout = evaluate(candles, price, IN_WINDOW);
 
     expect(readout?.direction).toBe("down");
     expect(readout!.score).toBeLessThanOrEqual(-MIN_SCORE);
     expect(readout!.confidence).toBeGreaterThanOrEqual(MIN_CONFIDENCE);
   });
 
-  it("не публикует перегретый (параболический) score выше рабочей полосы", () => {
+  it("потолок score — правило: вызов выше настроенного потолка не публикуется", () => {
+    // Потолок MAX_ENTRY_SCORE больше не калибровка под конкретный рынок, а
+    // жёсткое правило гейта, поэтому проверяем сам механизм отсечения.
     const candles = parabolicCandles(90);
-    const readout = evaluate(candles, candles[candles.length - 1].close, OPEN + 20_000)!;
+    const price = candles[candles.length - 1].close;
+    const strong = evaluate(candles, price, IN_WINDOW)!;
+    expect(strong.direction).toBe("up");
+    // Текущий потолок для этого сценария не является связывающим: сильное
+    // движение первой минуты теперь продолжается, а не откатывается.
+    expect(Math.abs(strong.score)).toBeLessThanOrEqual(MAX_ENTRY_SCORE);
 
-    expect(Math.abs(readout.score)).toBeGreaterThan(MAX_ENTRY_SCORE);
-    expect(readout.direction).toBe("stand-aside");
-    expect(readout.maxEntryPrice).toBe(0);
+    const capped = evaluateSignal({
+      symbol: "BTCUSDT",
+      candles,
+      price,
+      now: IN_WINDOW,
+      config: { ...DEFAULT_CONFIG, maxEntryScore: Math.abs(strong.score) - 0.02 },
+    })!;
+    expect(capped.direction).toBe("stand-aside");
+    expect(capped.maxEntryPrice).toBe(0);
   });
 
   it("не публикует вызов против старшего тренда (отскок против EMA 15/40)", () => {
@@ -216,7 +240,7 @@ describe("evaluateSignal — пороги публикации", () => {
         }),
       );
     }
-    const readout = evaluate(candles, price, OPEN + 20_000)!;
+    const readout = evaluate(candles, price, IN_WINDOW)!;
     expect(readout.direction).toBe("stand-aside");
   });
 
@@ -261,12 +285,18 @@ describe("evaluateSignal — фазы раунда", () => {
   const candles = risingCandles(90);
   const price = candles[candles.length - 1].close;
 
-  it("phase=early до 60 секунд", () => {
-    expect(evaluate(candles, price, OPEN + 59_999)?.phase).toBe("early");
+  it("phase=prepare до закрытия первой минуты раунда", () => {
+    expect(evaluate(candles, price, OPEN + 1_000)?.phase).toBe("prepare");
+    expect(evaluate(candles, price, OPEN + 59_999)?.phase).toBe("prepare");
   });
 
-  it("phase=mid от 60 до 150 секунд", () => {
-    expect(evaluate(candles, price, OPEN + 60_000)?.phase).toBe("mid");
+  it("phase=early ровно после закрытия первой минуты (окно подтверждения)", () => {
+    expect(evaluate(candles, price, OPEN + MIN_ENTRY_ELAPSED_MS)?.phase).toBe("early");
+    expect(evaluate(candles, price, OPEN + ENTRY_WINDOW_MS - 1)?.phase).toBe("early");
+  });
+
+  it("phase=mid от 120 до 180 секунд", () => {
+    expect(evaluate(candles, price, OPEN + ENTRY_WINDOW_MS)?.phase).toBe("mid");
     expect(evaluate(candles, price, OPEN + ENTRY_CUTOFF_MS - 1)?.phase).toBe("mid");
   });
 
@@ -276,10 +306,11 @@ describe("evaluateSignal — фазы раунда", () => {
   });
 
   it("эффективная уверенность затухает по фазам (early ≥ mid ≥ late)", () => {
-    const early = evaluate(candles, price, OPEN + 10_000)!;
-    const mid = evaluate(candles, price, OPEN + 90_000)!;
+    const early = evaluate(candles, price, OPEN + 90_000)!;
+    const mid = evaluate(candles, price, OPEN + 150_000)!;
     const late = evaluate(candles, price, OPEN + 200_000)!;
 
+    expect(early.phase).toBe("early");
     expect(early.effectiveConfidence).toBe(early.confidence);
     expect(mid.effectiveConfidence).toBeLessThan(early.confidence);
     expect(late.effectiveConfidence).toBeLessThan(mid.effectiveConfidence);
@@ -341,7 +372,7 @@ describe("evaluateSignal — максимальная цена входа", () =
   it("maxEntryPrice = estimatedProbability − EDGE_MARGIN, без уверенности", () => {
     const candles = risingCandles(90);
     const price = candles[candles.length - 1].close;
-    const readout = evaluate(candles, price, OPEN + 20_000)!;
+    const readout = evaluate(candles, price, IN_WINDOW)!;
 
     // Сильный рост гарантированно публикует вызов, поэтому проверка не уходит
     // в необязательную ветку и регрессия ловится всегда.
@@ -396,8 +427,8 @@ describe("evaluateSignal — максимальная цена входа", () =
   it("maxEntryPrice не зависит от agreement: одинаковый |score| — одинаковый гейт", () => {
     // confidence растёт от agreement, maxEntryPrice — нет. Обе серии дают вызов,
     // поэтому разница в confidence не должна двигать цену входа.
-    const up = evaluate(risingCandles(90), risingCandles(90)[89].close, OPEN + 20_000)!;
-    const down = evaluate(fallingCandles(90), fallingCandles(90)[89].close, OPEN + 20_000)!;
+    const up = evaluate(risingCandles(90), risingCandles(90)[89].close, IN_WINDOW)!;
+    const down = evaluate(fallingCandles(90), fallingCandles(90)[89].close, IN_WINDOW)!;
 
     expect(up.direction).toBe("up");
     expect(down.direction).toBe("down");
@@ -407,9 +438,46 @@ describe("evaluateSignal — максимальная цена входа", () =
 
   it("для stand-aside цена входа всегда 0", () => {
     const candles = flatCandles(90);
-    const readout = evaluate(candles, BASE, OPEN + 20_000)!;
+    const readout = evaluate(candles, BASE, IN_WINDOW)!;
+    expect(readout.phase).toBe("early");
     expect(readout.direction).toBe("stand-aside");
     expect(readout.maxEntryPrice).toBe(0);
+  });
+});
+
+describe("evaluateSignal — окно подтверждения (первая минута раунда)", () => {
+  const candles = risingCandles(120);
+  const price = candles[candles.length - 1].close;
+
+  it("не публикует вызов до закрытия первой минуты раунда даже при сильном тренде", () => {
+    for (const now of [OPEN + 1_000, OPEN + 20_000, OPEN + 45_000, OPEN + 59_999]) {
+      const readout = evaluate(candles, price, now)!;
+      expect(readout.phase).toBe("prepare");
+      expect(readout.direction).toBe("stand-aside");
+      expect(readout.maxEntryPrice).toBe(0);
+      expect(readout.entryEligible).toBe(false);
+    }
+  });
+
+  it("entryOpensAt = начало раунда + закрытие первой минуты", () => {
+    const readout = evaluate(candles, price, IN_WINDOW)!;
+    expect(readout.windowStart).toBe(OPEN);
+    expect(readout.entryOpensAt).toBe(OPEN + MIN_ENTRY_ELAPSED_MS);
+    expect(readout.entryDeadline).toBe(OPEN + ENTRY_WINDOW_MS);
+    expect(readout.entryOpensAt).toBeLessThan(readout.entryDeadline);
+  });
+
+  it("публикует вызов внутри окна подтверждения и помечает его как входной", () => {
+    const readout = evaluate(candles, price, OPEN + MIN_ENTRY_ELAPSED_MS + 1_000)!;
+    expect(readout.phase).toBe("early");
+    expect(readout.direction).toBe("up");
+    expect(readout.entryEligible).toBe(true);
+  });
+
+  it("в prepare уверенность не затухает (окно ещё не открылось)", () => {
+    const prepare = evaluate(candles, price, OPEN + 30_000)!;
+    expect(prepare.phase).toBe("prepare");
+    expect(prepare.effectiveConfidence).toBe(prepare.confidence);
   });
 });
 

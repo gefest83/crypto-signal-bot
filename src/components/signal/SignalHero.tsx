@@ -13,6 +13,7 @@ import {
   ENTRY_CUTOFF_MS,
   ENTRY_WINDOW_MS,
   MIN_CONFIDENCE,
+  MIN_ENTRY_ELAPSED_MS,
   MIN_SCORE,
   type Phase,
   type SignalReadout,
@@ -44,7 +45,8 @@ type SignalHeroProps = {
 type Tone = "up" | "down" | "neutral";
 
 const PHASE_LABEL: Record<Phase, string> = {
-  early: "РАННИЙ ВХОД",
+  prepare: "ЖДЁМ 1-Ю МИНУТУ",
+  early: "ОКНО ПОДТВЕРЖДЕНИЯ",
   mid: "ВХОД УХОДИТ",
   late: "НАБЛЮДЕНИЕ",
 };
@@ -134,42 +136,56 @@ function EntryWindow({
   phase: Phase;
 }) {
   const elapsed = Math.max(0, now - windowStart);
-  const bestLeft = ENTRY_WINDOW_MS - elapsed;
-  const pct = Math.min(100, (elapsed / ENTRY_WINDOW_MS) * 100);
-  const over = phase !== "early";
+  const waiting = phase === "prepare";
+  const over = phase !== "early" && !waiting;
+  const opensAt = windowStart + MIN_ENTRY_ELAPSED_MS;
+  const span = Math.max(1, ENTRY_WINDOW_MS - MIN_ENTRY_ELAPSED_MS);
+  const pct = Math.max(
+    0,
+    Math.min(100, ((elapsed - MIN_ENTRY_ELAPSED_MS) / span) * 100),
+  );
+  const left = Math.max(0, ENTRY_WINDOW_MS - elapsed);
 
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-baseline justify-between gap-3">
         <span className="text-[11px] font-medium tracking-wider text-muted-foreground uppercase">
-          Окно лучшего входа
+          Окно подтверждения
         </span>
         <span
           className={cn(
             "font-mono text-sm tabular-nums",
-            over ? "text-warn-ink" : "text-foreground",
+            waiting || over ? "text-warn-ink" : "text-foreground",
           )}
         >
-          {over ? "закрыто" : `осталось ${formatCountdown(bestLeft)}`}
+          {waiting
+            ? `открытие через ${formatCountdown(Math.max(0, opensAt - now))}`
+            : over
+              ? "закрыто"
+              : `осталось ${formatCountdown(left)}`}
         </span>
       </div>
       <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
         <div
           className={cn(
             "h-full rounded-full transition-[width] duration-1000 ease-linear",
-            over ? "bg-warn" : "bg-primary",
+            waiting ? "bg-warn" : over ? "bg-warn" : "bg-primary",
           )}
-          style={{ width: `${over ? 100 : pct}%` }}
+          style={{ width: `${waiting ? 0 : over ? 100 : pct}%` }}
         />
       </div>
       <p className="text-xs leading-relaxed text-muted-foreground">
-        {phase === "early"
-          ? "Контракт ещё не переоценён — это окно и есть весь перевес стратегии."
-          : phase === "mid"
-            ? `Поздний вход: шансы контракта уже выросли. Вход закроется через ${formatCountdown(
-                Math.max(0, ENTRY_CUTOFF_MS - elapsed),
-              )}.`
-            : "Вход закрыт: цена контракта уже отражает движение. Ждём следующий раунд."}
+        {phase === "prepare"
+          ? `Идёт первая минута раунда. До ${Math.round(
+              MIN_ENTRY_ELAPSED_MS / 1000,
+            )}-й секунды движок видит только шум тиков, поэтому не делает вызов: вход возможен, только когда первая минута закроется.`
+          : phase === "early"
+            ? "Первая минута закрыта, контракт ещё не переоценён — это окно и есть весь перевес стратегии."
+            : phase === "mid"
+              ? `Поздний вход: шансы контракта уже выросли. Вход закроется через ${formatCountdown(
+                  Math.max(0, ENTRY_CUTOFF_MS - elapsed),
+                )}.`
+              : "Вход закрыт: цена контракта уже отражает движение. Ждём следующий раунд."}
       </p>
     </div>
   );
@@ -208,14 +224,17 @@ export function SignalHero({
   const warming = !readout;
   const showCall = Boolean(call);
   const skipped = !call && !warming && status === "closed";
+  const phase: Phase = (call ?? readout)?.phase ?? "early";
+  // Before the opening minute closes there is nothing to lean on: showing a
+  // direction here would imply an edge the engine deliberately refuses to claim.
+  const preparing = !warming && !showCall && phase === "prepare";
   const leaning: Tone = readout ? (readout.score >= 0 ? "up" : "down") : "neutral";
   const direction: Tone = showCall
     ? (call!.direction as Tone)
-    : skipped
+    : skipped || preparing
       ? "neutral"
       : leaning;
-  const phase: Phase = (call ?? readout)?.phase ?? "early";
-  const tone: Tone = skipped ? "neutral" : direction;
+  const tone: Tone = skipped || preparing ? "neutral" : direction;
   const nextRound = Math.max(0, windowEnd - now);
   const shownConfidence = call
     ? call.effectiveConfidence
@@ -229,9 +248,11 @@ export function SignalHero({
       ? direction === "up"
         ? "UP"
         : "DOWN"
-      : skipped
-        ? "СКИП"
-        : "—";
+      : preparing
+        ? "ЖДЁМ"
+        : skipped
+          ? "СКИП"
+          : "—";
 
   const title = warming
     ? "Считаю рынок"
@@ -239,9 +260,11 @@ export function SignalHero({
       ? direction === "up"
         ? "Прогноз роста на 5 минут"
         : "Прогноз падения на 5 минут"
-      : skipped
-        ? "Раунд пропущен осознанно"
-        : `Сканирую раунд — склонность ${leaning === "up" ? "вверх" : "вниз"}`;
+      : preparing
+        ? "Идёт первая минута раунда"
+        : skipped
+          ? "Раунд пропущен осознанно"
+          : `Сканирую раунд — склонность ${leaning === "up" ? "вверх" : "вниз"}`;
 
   const subtitle = warming
     ? "Первый расчёт появится через пару секунд."
@@ -249,11 +272,15 @@ export function SignalHero({
       ? `Вызов зафиксирован в ${formatClockWithSeconds(
           call!.evaluatedAt,
         )} UTC и не меняется до конца раунда.`
-      : skipped
-        ? `Перевес ниже порога — отсутствие сделки тоже позиция. Следующий раунд через ${formatCountdown(
-            nextRound,
-          )}.`
-        : `Перевес ${readout!.score.toFixed(2)} из порога ${MIN_SCORE.toFixed(2)} — ждём подтверждения факторами.`;
+      : preparing
+        ? `Вызов станет возможен в ${formatClockWithSeconds(
+            readout!.entryOpensAt,
+          )} UTC — сразу после закрытия первой минуты раунда.`
+        : skipped
+          ? `Перевес ниже порога — отсутствие сделки тоже позиция. Следующий раунд через ${formatCountdown(
+              nextRound,
+            )}.`
+          : `Перевес ${readout!.score.toFixed(2)} из порога ${MIN_SCORE.toFixed(2)} — ждём подтверждения факторами.`;
 
   return (
     <section className={cn("surface border", CARD_TONE[tone])}>

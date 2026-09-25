@@ -81,7 +81,7 @@ function AssetSwitch({
         );
       })}
       <span className="ms-auto hidden text-[11px] text-muted-foreground sm:block">
-        Один вызов на раунд · решение принимается в первые секунды
+        Один вызов на раунд · решение после закрытия первой минуты
       </span>
     </div>
   );

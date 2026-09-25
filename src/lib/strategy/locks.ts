@@ -14,8 +14,15 @@ import type { SignalReadout } from "./engine";
 
 export type LocksMap = Partial<Record<MarketSymbol, SignalReadout>>;
 
-/** A locked call is always directional — stand-aside can never be locked. */
-export type QualifiedCall = SignalReadout & { direction: "up" | "down" };
+/**
+ * A locked call is always directional — stand-aside can never be locked — and
+ * always belongs to the confirmation window, because that is the only phase the
+ * engine will publish from.
+ */
+export type QualifiedCall = SignalReadout & {
+  direction: "up" | "down";
+  phase: "early";
+};
 
 /**
  * Given the current locks and fresh readouts, decide the next locks.
@@ -23,8 +30,8 @@ export type QualifiedCall = SignalReadout & { direction: "up" | "down" };
  * Rules, per symbol:
  * - no readout yet (feed warming up) → keep whatever was locked;
  * - a lock already exists for this window → keep it, never rewrite;
- * - a directional readout before the entry cutoff → lock it;
- * - otherwise (stand-aside or too late) → nothing is locked.
+ * - a directional readout inside the confirmation window → lock it;
+ * - otherwise (stand-aside, or before/after the window) → nothing is locked.
  *
  * Returns the same object instance when nothing changed, so callers can skip
  * re-renders cheaply.
@@ -50,12 +57,21 @@ export function nextLocks(
       next[symbol] = existing;
       continue;
     }
-    // New round: only a precision-qualified call in the opening window can be
-    // locked. A mid-round directional lean is intentionally not a trade.
-    if (readout.entryEligible && readout.direction !== "stand-aside") {
+    // New round: only a precision-qualified call inside the confirmation window
+    // can be locked. A directional lean from any other phase is not a trade.
+    if (
+      readout.entryEligible &&
+      readout.phase === "early" &&
+      readout.direction !== "stand-aside"
+    ) {
       next[symbol] = readout;
-      // Re-assert the narrowed direction so the journal gets "up" | "down".
-      lockedCalls.push({ ...readout, direction: readout.direction });
+      // Re-assert the narrowed shape so the journal receives "up" | "down" and a
+      // phase the stored schema allows.
+      lockedCalls.push({
+        ...readout,
+        direction: readout.direction,
+        phase: readout.phase,
+      });
     } else {
       next[symbol] = undefined;
     }
