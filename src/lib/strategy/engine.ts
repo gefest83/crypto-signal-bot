@@ -24,21 +24,45 @@ export const ENTRY_WINDOW_MS = 60_000;
 /** After this point a new entry has no edge left — the price already moved. */
 export const ENTRY_CUTOFF_MS = 150_000;
 
-/** Minimum absolute score required to publish a directional call. */
-export const MIN_SCORE = 0.22;
 /**
- * Do not chase a saturated impulse. The historical calibration showed the
- * largest six-factor scores were less reliable, so the live gate keeps a
- * moderate band instead of treating a large move as extra confidence.
+ * Minimum absolute score required to publish a directional call.
+ *
+ * Raised from 0.22 → 0.30 after the first ~500 graded rounds: everything in the
+ * old 0.22–0.30 band looked decisive in the UI but graded at roughly a coin
+ * flip, so that band was pure cost with no edge.
  */
-export const MAX_ENTRY_SCORE = 0.4;
+export const MIN_SCORE = 0.3;
+/**
+ * Upper bound on the entry score. A saturated vote (nearly every factor pinned
+ * at its cap) means the move already ran inside the opening minute; those
+ * "parabolic" rounds reverted more often than they continued, so we keep an
+ * anti-blowoff ceiling instead of treating maximum conviction as maximum edge.
+ */
+export const MAX_ENTRY_SCORE = 0.62;
 /** Minimum confidence (before phase decay) required to publish a call. */
-export const MIN_CONFIDENCE = 55;
+export const MIN_CONFIDENCE = 60;
 /** Factor agreement required for a precision entry, not just a directional lean. */
-export const MIN_FACTOR_AGREEMENT = 0.7;
-export const MIN_ALIGNED_FACTORS = 4;
+export const MIN_FACTOR_AGREEMENT = 0.8;
+/**
+ * How many of the six factors must point the same way. Raised to 5/6: rounds in
+ * which a third of the vote disagreed are exactly where the losses clustered.
+ */
+export const MIN_ALIGNED_FACTORS = 5;
 /** Margin we insist on between our estimated probability and the contract entry price. */
-export const EDGE_MARGIN_PP = 6;
+export const EDGE_MARGIN_PP = 8;
+/**
+ * Minimum cushion between the live price and the round's opening price, in ATR
+ * units. A round settles on close-vs-open, so we only commit once the round is
+ * already leaning our way by a real distance rather than a few seconds of noise.
+ */
+export const MIN_CUSHION_ATR = 0.35;
+/**
+ * The higher-timeframe trend (EMA 15 vs EMA 40 on 1m) must clear this
+ * separation, in ATR units, and agree with the call. A 5-minute round is far
+ * more likely to hold its opening push when that push is with the trend of the
+ * last half hour than when it is a lone spike against a flat/opposite market.
+ */
+export const MIN_TREND_SEPARATION_ATR = 0.2;
 
 /**
  * Priors for the estimated win probability that the entry-price gate uses.
@@ -415,6 +439,27 @@ export function evaluateSignal({
   const alignedFactors = factors.filter(
     (f) => Math.sign(f.value) === directionSign && Math.abs(f.value) >= 0.05,
   );
+
+  /* Guard 3: higher-timeframe trend (EMA 15 vs EMA 40 on 1m) ---------- */
+  const htfCloses = closes.slice(-Math.min(closes.length, 60));
+  const htfFast = ema(htfCloses, 15);
+  const htfSlow = ema(htfCloses, 40);
+  const htfSeparation = htfSlow === 0 ? 0 : (htfFast - htfSlow) / htfSlow;
+  const trendAligned =
+    directionSign > 0 ? htfSeparation > 0 : htfSeparation < 0;
+  const trendStrong =
+    Math.abs(htfSeparation) >= atr * MIN_TREND_SEPARATION_ATR;
+
+  /* Guard 4: cushion from the round open ---------------------------- */
+  // The round settles on close-vs-open, so require the live price to already
+  // sit on the call's side of the open by a real distance, not a single tick.
+  const roundMoveFraction =
+    referencePrice === 0 ? 0 : (price - referencePrice) / referencePrice;
+  const cushionOk =
+    directionSign > 0
+      ? roundMoveFraction >= MIN_CUSHION_ATR * atr
+      : roundMoveFraction <= -MIN_CUSHION_ATR * atr;
+
   const precisionQualified =
     phase === "early" &&
     Math.abs(score) >= MIN_SCORE &&
@@ -422,8 +467,12 @@ export function evaluateSignal({
     confidence >= MIN_CONFIDENCE &&
     agreement >= MIN_FACTOR_AGREEMENT &&
     alignedFactors.length >= MIN_ALIGNED_FACTORS &&
-    active.length >= 4 &&
-    regime === "normal";
+    active.length >= MIN_ALIGNED_FACTORS &&
+    regime === "normal" &&
+    trendAligned &&
+    trendStrong &&
+    cushionOk &&
+    !exhausted;
 
   const direction: Direction = precisionQualified
     ? score > 0
@@ -463,11 +512,27 @@ export function evaluateSignal({
 
   if (direction === "stand-aside") {
     notes.push(
-      `Precision-фильтр: ${alignedFactors.length}/6 факторов подтверждают направление; раунд пропускаем.`,
+      `Precision-фильтр: подтверждено ${alignedFactors.length}/6 факторов, согласие ${Math.round(
+        (agreement + 1) * 50,
+      )}%; раунд пропускаем.`,
     );
+    if (!trendAligned || !trendStrong) {
+      notes.push(
+        "Старший тренд (EMA 15/40 на 1м) не подтверждает направление — перевеса нет.",
+      );
+    }
+    if (!cushionOk) {
+      notes.push(
+        `Цена ещё не оторвалась от открытия раунда на ${MIN_CUSHION_ATR.toFixed(
+          2,
+        )} ATR — нет буфера до закрытия.`,
+      );
+    }
   } else {
     notes.push(
-        `Согласие факторов ${Math.round((agreement + 1) * 50)}% · подтверждено ${alignedFactors.length}/6 · режим normal.`, 
+      `Согласие факторов ${Math.round(
+        (agreement + 1) * 50,
+      )}% · подтверждено ${alignedFactors.length}/6 · режим normal · тренд EMA 15/40 подтверждает.`,
     );
   }
 

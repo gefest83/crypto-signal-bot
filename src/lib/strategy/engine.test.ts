@@ -43,28 +43,55 @@ const candle = (openTime: number, close: number, overrides: Partial<Candle> = {}
   };
 };
 
-/** Rising market: each minute +0.02% with mild noise-free candles. */
-function risingCandles(count: number, startPrice = BASE): Candle[] {
+/**
+ * Market shape used by most fixtures: a net drift with pullbacks, so RSI(14)
+ * stays in a tradeable band (not pinned at 100/0) and taker flow leans with the
+ * move. Real ticks are never a monotone staircase, and the stricter precision
+ * gate deliberately rejects an over-extended staircase.
+ */
+const UP_CYCLE = [0.0008, -0.0005, 0.0006, -0.0004, 0.0009];
+const DOWN_CYCLE = UP_CYCLE.map((value) => -value);
+
+function trendCandles(
+  count: number,
+  cycle: readonly number[],
+  startPrice = BASE,
+  scale = 1,
+): Candle[] {
   const out: Candle[] = [];
   let price = startPrice;
+  const bullish = cycle[0] > 0;
   for (let i = 0; i < count; i += 1) {
     const open = price;
-    price = price * 1.0002;
-    out.push(candle(OPEN + i * 60_000, price, { open }));
+    price = price * (1 + cycle[i % cycle.length] * scale);
+    out.push(
+      candle(OPEN + i * 60_000, price, {
+        open,
+        volume: 120,
+        quoteVolume: price * 120,
+        takerBuyBase: 120 * (bullish ? 0.62 : 0.38),
+      }),
+    );
   }
   return out;
 }
 
-/** Falling market: each minute −0.02%. */
+/** Rising market: ~+0.03%/min net with pullbacks and buy-side taker flow. */
+function risingCandles(count: number, startPrice = BASE): Candle[] {
+  return trendCandles(count, UP_CYCLE, startPrice);
+}
+
+/** Falling market: ~−0.03%/min net with pullbacks and sell-side taker flow. */
 function fallingCandles(count: number, startPrice = BASE): Candle[] {
-  const out: Candle[] = [];
-  let price = startPrice;
-  for (let i = 0; i < count; i += 1) {
-    const open = price;
-    price = price * 0.9998;
-    out.push(candle(OPEN + i * 60_000, price, { open }));
-  }
-  return out;
+  return trendCandles(count, DOWN_CYCLE, startPrice);
+}
+
+/**
+ * Parabolic variant: the same uptrend amplified 4×, so nearly every factor
+ * saturates. Used to prove the anti-blowoff ceiling rejects it.
+ */
+function parabolicCandles(count: number, startPrice = BASE): Candle[] {
+  return trendCandles(count, UP_CYCLE, startPrice, 4);
 }
 
 /** Flat market with realistic per-minute ranges. */
@@ -162,23 +189,35 @@ describe("evaluateSignal — пороги публикации", () => {
     expect(readout!.confidence).toBeGreaterThanOrEqual(MIN_CONFIDENCE);
   });
 
-  it("не публикует перегретый score выше рабочей полосы", () => {
-    const candles = risingCandles(90).map((row, index) => {
-      const open = BASE * 1.0004 ** index;
-      const close = BASE * 1.0004 ** (index + 1);
-      return {
-        ...row,
-        open,
-        close,
-        high: Math.max(open, close) * 1.0004,
-        low: Math.min(open, close) * 0.9996,
-      };
-    });
+  it("не публикует перегретый (параболический) score выше рабочей полосы", () => {
+    const candles = parabolicCandles(90);
     const readout = evaluate(candles, candles[candles.length - 1].close, OPEN + 20_000)!;
 
     expect(Math.abs(readout.score)).toBeGreaterThan(MAX_ENTRY_SCORE);
     expect(readout.direction).toBe("stand-aside");
     expect(readout.maxEntryPrice).toBe(0);
+  });
+
+  it("не публикует вызов против старшего тренда (отскок против EMA 15/40)", () => {
+    // 86 минут падения, затем резкий отскок вверх в последних свечах: младшие
+    // факторы смотрят вверх, но EMA 15/40 по-прежнему ниже — вход запрещён.
+    const base = fallingCandles(86);
+    const candles = base.slice();
+    let price = candles[candles.length - 1].close;
+    for (let i = 86; i < 90; i += 1) {
+      const open = price;
+      price = price * 1.0009;
+      candles.push(
+        candle(OPEN + i * 60_000, price, {
+          open,
+          volume: 120,
+          quoteVolume: price * 120,
+          takerBuyBase: 120 * 0.7,
+        }),
+      );
+    }
+    const readout = evaluate(candles, price, OPEN + 20_000)!;
+    expect(readout.direction).toBe("stand-aside");
   });
 
   it("не публикует тот же импульс после закрытия early-окна", () => {

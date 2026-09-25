@@ -206,13 +206,25 @@ export const clearSignals = mutation({
   handler: async (ctx) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
-    const rows = await ctx.db
-      .query("signals")
-      .withIndex("by_user_window", (q) => q.eq("userId", userId))
-      .take(500);
-    for (const row of rows) {
-      await ctx.db.delete(row._id);
+
+    // Delete the whole journal, not just the newest slice: the accuracy shown in
+    // the UI is measured over every stored row, so a partial clear would keep
+    // diluting the current strategy with calls made by the previous one.
+    const batchSize = 500;
+    const maxRows = 5000;
+    let deleted = 0;
+    while (deleted < maxRows) {
+      const rows = await ctx.db
+        .query("signals")
+        .withIndex("by_user_window", (q) => q.eq("userId", userId))
+        .take(batchSize);
+      if (rows.length === 0) break;
+      for (const row of rows) {
+        await ctx.db.delete(row._id);
+      }
+      deleted += rows.length;
+      if (rows.length < batchSize) break;
     }
-    return rows.length;
+    return deleted;
   },
 });
