@@ -461,6 +461,84 @@ async function main() {
     return;
   }
 
+  if (process.argv[3] === "fills") {
+    // The decisive question for a maker strategy: would a limit order at the
+    // bid actually have been hit before the round resolved?
+    //
+    // We post at t+60 at the bid (last trade minus half a spread) on whichever
+    // side is the favourite, then look at every later trade print in the round.
+    // A print at or below our limit means someone sold into us.
+    //
+    // CAVEAT: prices-history is ~1-minute granularity, so we only observe ~3
+    // prints after entry. This UNDERSTATES the fill rate; treat it as a floor.
+    const ENTRY = 60;
+    const FAVOURITE = 0.8;
+    const at = Number(process.argv[4] ?? ENTRY);
+
+    type Fill = { filled: boolean; cost: number; won: boolean; p0: number };
+    const signals: Fill[] = [];
+
+    for (const round of rounds) {
+      if (round.upWon === null) continue;
+      const samples = round.samples
+        .map((s) => ({ dt: s.t - round.t0, p: s.p }))
+        .sort((a, b) => a.dt - b.dt);
+      const entry = samples.find((s) => s.dt >= at);
+      if (!entry) continue;
+
+      // Which side is the favourite, and what does that side cost?
+      const up = entry.p >= 0.5;
+      const side = up ? entry.p : 1 - entry.p;
+      if (side < FAVOURITE) continue;
+
+      const limit = Math.max(0.01, Math.round((side - 0.005) * 1000) / 1000);
+      const later = samples.filter((s) => s.dt > entry.dt);
+      const hit = later.some((s) => (up ? s.p : 1 - s.p) <= limit);
+      signals.push({
+        filled: hit,
+        cost: limit,
+        won: up === round.upWon,
+        p0: side,
+      });
+    }
+
+    const filled = signals.filter((s) => s.filled);
+    const unfilled = signals.filter((s) => !s.filled);
+    const pnl = (s: Fill) => (s.won ? 1 / s.cost - 1 : -1);
+    const total = signals.length;
+    const rate = (rows: Fill[]) =>
+      rows.length === 0 ? "—" : `${((rows.filter((s) => s.won).length / rows.length) * 100).toFixed(1)}%`;
+
+    console.log(`\n=== лимитная заявка на фаворита, вход t+${at}s ===`);
+    console.log(`сигналов            ${total}`);
+    console.log(`порог фаворита     ${FAVOURITE.toFixed(2)}`);
+    console.log(`средняя цена входа ${(signals.reduce((a, s) => a + s.cost, 0) / total).toFixed(3)}`);
+    console.log(`\nисполнено          ${filled.length} / ${total} = ${((filled.length / total) * 100).toFixed(1)}%  (нижняя оценка)`);
+    console.log(`\nADVERSE SELECTION — сравнение двух групп:`);
+    console.log(`  попадания среди НЕисполненных  ${rate(unfilled)}   (это базовая ставка фаворита)`);
+    console.log(`  попадания среди ИСПОЛНЕННЫХ     ${rate(filled)}`);
+    console.log(
+      `  разница                        ${
+        unfilled.length && filled.length
+          ? `${(
+              (filled.filter((s) => s.won).length / filled.length -
+                unfilled.filter((s) => s.won).length / unfilled.length) *
+                100
+            ).toFixed(1)} п.п.`
+          : "—"
+      }`,
+    );
+    if (filled.length > 0) {
+      const wins = filled.filter((s) => s.won).length;
+      console.log(`попаданий среди исполненных ${wins}/${filled.length} = ${((wins / filled.length) * 100).toFixed(1)}%`);
+      console.log(`\nP&L на исполненную сделку   ${(filled.reduce((a, s) => a + pnl(s), 0) / filled.length).toFixed(4)}`);
+      console.log(`P&L на каждый сигнал        ${(filled.reduce((a, s) => a + pnl(s), 0) / total).toFixed(4)}  ← вот это и есть честный перевес`);
+    } else {
+      console.log("\nни одна заявка не была бы исполнена — перевес существует только на бумаге");
+    }
+    return;
+  }
+
   if (process.argv[3] === "timing") {
     // Where along the round is the price cheapest relative to the outcome?
     // EV of buying UP at each available quote.
