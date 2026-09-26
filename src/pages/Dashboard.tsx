@@ -7,6 +7,13 @@ import { Button } from "@/components/ui/button";
 import type { PmAsset } from "../convex/polymarket";
 import { useAuth } from "@/hooks/use-auth";
 import { useMakerSession, type MakerSession } from "@/hooks/use-maker-session";
+import {
+  DEFAULT_LIMIT,
+  MIN_STAKE_USD,
+  STAKE_OPTIONS_USD,
+  stakeOutcomes,
+  type StakeUsd,
+} from "@/lib/strategy/maker-exit";
 import { cn } from "@/lib/utils";
 import { LogOut } from "lucide-react";
 import { useState } from "react";
@@ -24,6 +31,52 @@ const PHASE_HINT: Record<string, string> = {
   held: "держали",
   missed: "не набито",
 };
+
+/**
+ * Order size, in real USDC.
+ *
+ * Polymarket sells dollars, not shares, and the smallest order the books take
+ * is $1. At the 0.35 limit that is 2.86 shares, so a $1 stake is not a small
+ * bet — it is the full $1 at risk if the round goes against us, and it is the
+ * number every P&L on this screen is measured against.
+ */
+function StakeSwitch({
+  stake,
+  onSelect,
+}: {
+  stake: StakeUsd;
+  onSelect: (next: StakeUsd) => void;
+}) {
+  const outcomes = stakeOutcomes(stake, DEFAULT_LIMIT);
+
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <span className="text-[11px] text-muted-foreground">Стейк</span>
+      {STAKE_OPTIONS_USD.map((option) => (
+        <button
+          key={option}
+          type="button"
+          onClick={() => onSelect(option)}
+          className={cn(
+            "rounded-lg border px-3 py-1.5 font-mono text-xs transition-colors",
+            option === stake
+              ? "border-primary/40 bg-primary/5 text-foreground"
+              : "border-border bg-card text-muted-foreground hover:bg-muted/50",
+          )}
+        >
+          ${option}
+        </button>
+      ))}
+      <span className="ms-auto font-mono text-[11px] text-muted-foreground">
+        {outcomes.won.toFixed(2)} $ выигрыш · {outcomes.lost.toFixed(2)} $ проигрыш ·{" "}
+        {outcomes.exited.toFixed(2)} $ выход
+      </span>
+      {stake === MIN_STAKE_USD && (
+        <span className="text-[10px] text-muted-foreground/70">минимальный размер заявки</span>
+      )}
+    </div>
+  );
+}
 
 function AssetSwitch({
   asset,
@@ -71,8 +124,9 @@ function AssetSwitch({
 export default function Dashboard() {
   const { user, signOut } = useAuth();
   const navigate = useNavigate();
-  const maker = useMakerSession();
   const [asset, setAsset] = useState<PmAsset>("btc");
+  const [stake, setStake] = useState<StakeUsd>(1);
+  const maker = useMakerSession(DEFAULT_LIMIT, stake);
 
   const handleSignOut = async () => {
     await signOut();
@@ -109,6 +163,7 @@ export default function Dashboard() {
       </header>
 
       <main className="mx-auto flex w-full max-w-6xl flex-col gap-5 px-4 py-6 sm:px-6 sm:py-8">
+        <StakeSwitch stake={stake} onSelect={setStake} />
         <AssetSwitch asset={asset} onSelect={setAsset} sessions={maker.sessions} />
 
         <MakerRound
@@ -119,7 +174,7 @@ export default function Dashboard() {
         />
 
         <div className="grid gap-5 lg:grid-cols-2 lg:items-start">
-          <MakerEdge />
+          <MakerEdge stake={stake} />
           <MakerRules />
         </div>
 

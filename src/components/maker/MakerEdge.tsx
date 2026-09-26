@@ -1,16 +1,21 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { EXIT_SLIPPAGE, MAKER_REBATE } from "@/lib/strategy/maker-exit";
+import {
+  DEFAULT_LIMIT,
+  EXIT_SLIPPAGE,
+  MEASURED_PER_SHARE,
+  MAKER_REBATE,
+  expectedPnlPerStake,
+  stakeOutcomes,
+  type StakeUsd,
+} from "@/lib/strategy/maker-exit";
 import { AlertTriangle, TrendingUp } from "lucide-react";
 
-/** Measured on 5760 real 15-minute rounds over 30 days, walk-forward. */
-const MEASURED = {
-  pnlPerTrade: 0.021,
-  losingDays: "3 из 31",
-  exitRate: 0.91,
-  survivorWinRate: 0.76,
-  entryOnlyPnl: -0.102,
-  rounds: 5760,
-} as const;
+const MEASURED = MEASURED_PER_SHARE;
+
+/** USDC, signed, always readable at a glance. */
+function usd(value: number): string {
+  return `${value < 0 ? "−" : "+"}$${Math.abs(value).toFixed(2)}`;
+}
 
 function Stat({ label, value, tone }: { label: string; value: string; tone?: "up" | "down" }) {
   return (
@@ -36,7 +41,11 @@ function Stat({ label, value, tone }: { label: string; value: string; tone?: "up
  * Putting them side by side is the most honest way to present a result whose
  * money comes from one specific mechanism.
  */
-export function MakerEdge() {
+export function MakerEdge({ stake }: { stake: StakeUsd }) {
+  const outcomes = stakeOutcomes(stake, DEFAULT_LIMIT);
+  const perStake = expectedPnlPerStake(stake, DEFAULT_LIMIT);
+  const entryOnly = expectedPnlPerStake(stake, DEFAULT_LIMIT, MEASURED.pnlEntryOnly);
+
   return (
     <Card>
       <CardHeader>
@@ -51,28 +60,48 @@ export function MakerEdge() {
             <p className="text-[10px] tracking-wide text-rose-500/80 uppercase">
               Вход без выхода
             </p>
-            <p className="mt-0.5 font-mono text-lg text-rose-500">
-              −{(Math.abs(MEASURED.entryOnlyPnl) * 100).toFixed(1)}¢
-            </p>
+            <p className="mt-0.5 font-mono text-lg text-rose-500">{usd(entryOnly)}</p>
             <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
-              Лимит набивается тем, кто прав. Покупка и удержание до расчёния убыточны.
+              На стейк ${stake}. Лимит набивается тем, кто прав: покупка и удержание до расчёния
+              стоят полную ставку.
             </p>
           </div>
           <div className="rounded-lg border border-emerald-500/25 bg-emerald-500/5 px-3 py-2.5">
             <p className="text-[10px] tracking-wide text-emerald-500/80 uppercase">
               Вход + выход в безубыток
             </p>
-            <p className="mt-0.5 font-mono text-lg text-emerald-500">
-              +{(MEASURED.pnlPerTrade * 100).toFixed(1)}¢
-            </p>
+            <p className="mt-0.5 font-mono text-lg text-emerald-500">{usd(perStake)}</p>
             <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
-              Контракт возвращается к цене входа, и сделка закрывается почти в ноль.
+              На стейк ${stake}. Контракт возвращается к цене входа, и сделка закрывается почти в
+              ноль.
             </p>
           </div>
         </div>
 
+        {/* What one real order is worth, in each of the three outcomes. */}
+        <div className="rounded-lg border border-border/60 bg-card/40">
+          <p className="border-b border-border/60 px-3 py-2 text-[10px] tracking-wide text-muted-foreground uppercase">
+            Сделка на ${stake} по лимиту {DEFAULT_LIMIT.toFixed(2)} →{" "}
+            {(1 / DEFAULT_LIMIT).toFixed(2)} шар
+          </p>
+          <dl className="grid grid-cols-3 divide-x divide-border/60">
+            <div className="px-3 py-2">
+              <dt className="text-[10px] text-muted-foreground">Держали, выиграли</dt>
+              <dd className="mt-0.5 font-mono text-sm text-emerald-500">{usd(outcomes.won)}</dd>
+            </div>
+            <div className="px-3 py-2">
+              <dt className="text-[10px] text-muted-foreground">Держали, проиграли</dt>
+              <dd className="mt-0.5 font-mono text-sm text-rose-500">{usd(outcomes.lost)}</dd>
+            </div>
+            <div className="px-3 py-2">
+              <dt className="text-[10px] text-muted-foreground">Вышли в ноль</dt>
+              <dd className="mt-0.5 font-mono text-sm text-amber-500">{usd(outcomes.exited)}</dd>
+            </div>
+          </dl>
+        </div>
+
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-          <Stat label="P&L на сделку" value={`+${(MEASURED.pnlPerTrade * 100).toFixed(1)}¢`} tone="up" />
+          <Stat label={`P&L на сделку ($${stake})`} value={usd(perStake)} tone="up" />
           <Stat label="Проигрышных дней" value={MEASURED.losingDays} />
           <Stat label="Возврат к лимиту" value={`${(MEASURED.exitRate * 100).toFixed(0)}%`} />
           <Stat
@@ -95,7 +124,8 @@ export function MakerEdge() {
             <p className="mt-1">
               Допущение о {(EXIT_SLIPPAGE * 100).toFixed(0)}ц на выход консервативно: реальный
               спред этих рынков — 1 тик, а ребейт мейкера добавляет{" "}
-              {(MAKER_REBATE * 100).toFixed(2)}¢ к сделке.
+              {(MAKER_REBATE * 100).toFixed(2)}¢ на шар, то есть{" "}
+              {((MAKER_REBATE / DEFAULT_LIMIT) * 100).toFixed(2)}¢ на стейк ${stake}.
             </p>
             <p className="mt-1">
               Направление не прогнозируется. На 80% срока раунда лучший из предикторов даёт 93.2%

@@ -1,4 +1,10 @@
-import { DEFAULT_LIMIT, EXIT_SLIPPAGE, LIMIT_MAX, LIMIT_MIN } from "@/lib/strategy/maker-exit";
+import {
+  DEFAULT_LIMIT,
+  EXIT_SLIPPAGE,
+  LIMIT_MAX,
+  LIMIT_MIN,
+  MIN_STAKE_USD,
+} from "@/lib/strategy/maker-exit";
 
 const RULES: { index: string; title: string; body: string; items?: { label: string; value: string }[] }[] =
   [
@@ -13,6 +19,7 @@ const RULES: { index: string; title: string; body: string; items?: { label: stri
       body: "Polymarket берёт с тейкера 7% × (1 − цена): при цене 0.30 это 4.9% ставки, то есть ровно величина перекоса, ради которого всё затевалось. Мейкер не платит ничего и получает 20% сборов обратно — поэтому весь перевес и есть вход без комиссии.",
       items: [
         { label: "Лимит", value: `${LIMIT_MIN}–${LIMIT_MAX}, рабочий ${DEFAULT_LIMIT.toFixed(2)}` },
+        { label: "Заявка", value: `$${MIN_STAKE_USD} = ${(1 / DEFAULT_LIMIT).toFixed(2)} шар` },
         { label: "Комиссия тейкера при 0.30", value: "4.9%" },
         { label: "Комиссия мейкера", value: "0%" },
       ],

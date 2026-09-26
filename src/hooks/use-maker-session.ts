@@ -1,6 +1,11 @@
 import { api } from "../convex/_generated/api";
 import { pmRoundStart, settledUp, type PmAsset, type PmRound } from "../convex/polymarket";
-import { DEFAULT_LIMIT, makerPnl, type Side } from "@/lib/strategy/maker-exit";
+import {
+  DEFAULT_LIMIT,
+  DEFAULT_STAKE_USD,
+  stakePnl,
+  type Side,
+} from "@/lib/strategy/maker-exit";
 import { useAction, useMutation } from "convex/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -32,6 +37,8 @@ export type MakerSession = {
   roundStart: number;
   side: Side | null;
   limit: number;
+  /** Real USDC committed to this round. Polymarket sells dollars, not shares. */
+  stake: number;
   phase: MakerPhase;
   /** Our side's live book: what it costs to buy, what we could sell into. */
   ask: number | null;
@@ -40,7 +47,7 @@ export type MakerSession = {
   filledAfterMs: number | null;
   /** The real result, once known. */
   upWon: boolean | null;
-  /** P&L in USDC on a $1 stake, or null while the trade is still open. */
+  /** P&L in USDC on the real stake, or null while the trade is still open. */
   pnl: number | null;
   note: string;
 };
@@ -54,13 +61,20 @@ export type MakerConsole = {
   start: number;
   end: number;
   limit: number;
+  stake: number;
 };
 
-const emptySession = (asset: PmAsset, roundStart: number, limit: number): MakerSession => ({
+const emptySession = (
+  asset: PmAsset,
+  roundStart: number,
+  limit: number,
+  stake: number,
+): MakerSession => ({
   asset,
   roundStart,
   side: null,
   limit,
+  stake,
   phase: "armed",
   ask: null,
   bid: null,
@@ -88,7 +102,10 @@ function candidateSide(upAsk: number | null): Side {
  * come back up to it. The live P&L shown here can therefore only be worse than
  * the backtest's +2.1¢, never better.
  */
-export function useMakerSession(limit: number = DEFAULT_LIMIT): MakerConsole {
+export function useMakerSession(
+  limit: number = DEFAULT_LIMIT,
+  stake: number = DEFAULT_STAKE_USD,
+): MakerConsole {
   const [now, setNow] = useState(() => Date.now());
   const [rounds, setRounds] = useState<Partial<Record<PmAsset, PmRound | null>>>({});
   const [sessions, setSessions] = useState<Partial<Record<PmAsset, MakerSession>>>({});
@@ -143,10 +160,10 @@ export function useMakerSession(limit: number = DEFAULT_LIMIT): MakerConsole {
         const round = rounds[asset];
         const existing = previous[asset];
         if (!existing || existing.roundStart !== start) {
-          next[asset] = emptySession(asset, start, limit);
+          next[asset] = emptySession(asset, start, limit, stake);
           continue;
         }
-        const session: MakerSession = { ...existing };
+        const session: MakerSession = { ...existing, stake };
 
         if (round?.upAsk != null) {
           session.side = session.side ?? candidateSide(round.upAsk);
@@ -163,7 +180,7 @@ export function useMakerSession(limit: number = DEFAULT_LIMIT): MakerConsole {
           session.bid >= session.limit
         ) {
           session.phase = "exited";
-          session.pnl = makerPnl(session.limit, false, true);
+          session.pnl = stakePnl(session.stake, session.limit, false, true);
         }
 
         if (session.phase === "armed") {
@@ -183,7 +200,7 @@ export function useMakerSession(limit: number = DEFAULT_LIMIT): MakerConsole {
       }
       return next;
     });
-  }, [rounds, now, start, limit]);
+  }, [rounds, now, start, limit, stake]);
 
   /**
    * Close out the round that just ended. A trade still open at the close
@@ -205,10 +222,10 @@ export function useMakerSession(limit: number = DEFAULT_LIMIT): MakerConsole {
         phase,
         upWon,
         slug: round?.slug ?? null,
-        pnl: phase === "held" ? makerPnl(session.limit, won, false) : null,
+        pnl: phase === "held" ? stakePnl(session.stake, session.limit, won, false) : null,
         note:
           phase === "held"
-            ? `Держали до расчёта, ${session.side?.toUpperCase()} — ${won ? "выигрыш" : "убыток"}.`
+            ? `Держали $${session.stake} до расчёта, ${session.side?.toUpperCase()} — ${won ? "выигрыш" : "убыток"}.`
             : "Лимит не набрался — сделки не было.",
       };
       setLog((previous) => [closed, ...previous].slice(0, 40));
@@ -248,5 +265,5 @@ export function useMakerSession(limit: number = DEFAULT_LIMIT): MakerConsole {
     }
   }, [now, start, sessions, rounds, closeRound]);
 
-  return { sessions, log, now, start, end: start + ROUND_MS, limit };
+  return { sessions, log, now, start, end: start + ROUND_MS, limit, stake };
 }

@@ -1,14 +1,21 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_LIMIT,
+  DEFAULT_STAKE_USD,
   EXIT_SLIPPAGE,
   LIMIT_MAX,
   LIMIT_MIN,
   MAKER_REBATE,
+  MIN_STAKE_USD,
+  STAKE_OPTIONS_USD,
   decideMakerAction,
+  expectedPnlPerStake,
   makerPnl,
   planMakerTrade,
   requiredSurvivorWinRate,
+  sharesForStake,
+  stakeOutcomes,
+  stakePnl,
 } from "./maker-exit";
 
 describe("рабочий диапазон лимита", () => {
@@ -21,6 +28,61 @@ describe("рабочий диапазон лимита", () => {
 
   it("лимит по умолчанию — тот, что walk-forward выбирал каждую неделю", () => {
     expect(DEFAULT_LIMIT).toBe(0.35);
+  });
+});
+
+describe("размер заявки в долларах, а не в шарах", () => {
+  it("минимальный размер заявки — $1, и он же по умолчанию", () => {
+    expect(MIN_STAKE_USD).toBe(1);
+    expect(DEFAULT_STAKE_USD).toBe(1);
+    expect(STAKE_OPTIONS_USD[0]).toBe(1);
+  });
+
+  it("$1 по лимиту 0.35 — это 2.86 шары, а не одна", () => {
+    // Главная ошибка учёта: раньше юнитом считалась одна шара за 35 центов,
+    // хотя Polymarket продаёт доллары и рискует весь стейк.
+    expect(sharesForStake(1, 0.35)).toBeCloseTo(1 / 0.35, 10);
+  });
+
+  it("проигрыш стоит полный стейк, а не цену лимита", () => {
+    // 2.86 шары × (−0.35) = −1.00
+    expect(stakePnl(1, 0.35, false, false)).toBeCloseTo(-1 + MAKER_REBATE / 0.35, 10);
+  });
+
+  it("выигрыш приносит больше стейка, потому что шар больше доллара", () => {
+    // 2.86 шары × 0.65 = +1.86
+    expect(stakePnl(1, 0.35, true, false)).toBeCloseTo(1.857142857 + MAKER_REBATE / 0.35, 6);
+  });
+
+  it("выход в ноль стоит проскальзывания на каждый шар", () => {
+    expect(stakePnl(1, 0.35, false, true)).toBeCloseTo(
+      -EXIT_SLIPPAGE / 0.35 + MAKER_REBATE / 0.35,
+      10,
+    );
+  });
+
+  it("масштабируется линейно: $5 и $10 — ровно в 5 и 10 раз", () => {
+    for (const won of [true, false]) {
+      for (const exited of [true, false]) {
+        expect(stakePnl(5, 0.35, won, exited)).toBeCloseTo(5 * stakePnl(1, 0.35, won, exited), 10);
+        expect(stakePnl(10, 0.35, won, exited)).toBeCloseTo(10 * stakePnl(1, 0.35, won, exited), 10);
+      }
+    }
+  });
+
+  it("риск на сделку — это стейк, и он известен заранее", () => {
+    const outcomes = stakeOutcomes(10, 0.35);
+    // Проигрыш ограничен стейком и не может быть хуже.
+    expect(outcomes.lost).toBeGreaterThan(-10.0001);
+    expect(outcomes.won).toBeGreaterThan(0);
+    // Выход всегда дешевле проигрыша.
+    expect(outcomes.exited).toBeGreaterThan(outcomes.lost);
+  });
+
+  it("измеренный плюс переносится на $1 стейк без потери смысла", () => {
+    // +2.1¢ на шару при 0.35 — это +6¢ на доллар стейка.
+    expect(expectedPnlPerStake(1, 0.35)).toBeCloseTo(0.021 / 0.35, 10);
+    expect(expectedPnlPerStake(1, 0.35)).toBeGreaterThan(0);
   });
 });
 

@@ -70,6 +70,11 @@ export function MakerRound({
                 ) : (
                   "ждём стакан"
                 )}
+                {session && (
+                  <span className="ms-2 font-mono">
+                    стейк ${session.stake} · {(1 / session.limit).toFixed(2)} шар
+                  </span>
+                )}
               </p>
             </div>
           </div>
@@ -189,10 +194,10 @@ export function MakerRound({
 
         {session?.pnl != null && (
           <p className="font-mono text-xs text-muted-foreground">
-            P&L сделки:{" "}
+            P&amp;L сделки на ${session.stake}:{" "}
             <span className={session.pnl >= 0 ? "text-emerald-500" : "text-rose-500"}>
-              {session.pnl >= 0 ? "+" : ""}
-              {(session.pnl * 100).toFixed(1)}¢
+              {session.pnl >= 0 ? "+" : "−"}$
+              {Math.abs(session.pnl).toFixed(2)}
             </span>
           </p>
         )}

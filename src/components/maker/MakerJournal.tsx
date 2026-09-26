@@ -33,8 +33,7 @@ export function MakerJournal({ log }: { log: MakerLogEntry[] }) {
             <span className="font-mono text-xs text-muted-foreground">
               {closed.length} закрыто ·{" "}
               <span className={total >= 0 ? "text-emerald-500" : "text-rose-500"}>
-                {total >= 0 ? "+" : ""}
-                {(total * 100).toFixed(1)}¢
+                {total >= 0 ? "+" : "−"}${Math.abs(total).toFixed(2)}
               </span>
             </span>
           )}
@@ -43,8 +42,8 @@ export function MakerJournal({ log }: { log: MakerLogEntry[] }) {
       <CardContent>
         {log.length === 0 ? (
           <p className="py-6 text-center text-xs leading-relaxed text-muted-foreground">
-            Закрытых раундов пока нет. Журнал заполняется, когда лимит набирается и сделка
-            закрывается — в среднем один раунд каждые 15 минут на актив.
+            Закрытых раундов пока нет.            Журнал заполняется, когда лимит набирается и сделка
+            закрывается. Суммы указаны в USDC на реальный стейк, а не на условный юнит.
           </p>
         ) : (
           <ul className="flex flex-col divide-y divide-border/60">
@@ -59,8 +58,8 @@ export function MakerJournal({ log }: { log: MakerLogEntry[] }) {
                     {entry.asset}
                     <span className="ml-1 text-muted-foreground">{entry.side ?? "—"}</span>
                   </span>
-                  <span className="w-16 shrink-0 font-mono text-muted-foreground">
-                    {entry.limit.toFixed(2)}
+                  <span className="w-20 shrink-0 font-mono text-muted-foreground">
+                    {entry.limit.toFixed(2)} · ${entry.stake}
                   </span>
                   <span className="min-w-0 flex-1 truncate text-muted-foreground">
                     {LABEL[entry.phase]}
@@ -76,7 +75,7 @@ export function MakerJournal({ log }: { log: MakerLogEntry[] }) {
                   >
                     {entry.pnl == null
                       ? "—"
-                      : `${entry.pnl >= 0 ? "+" : ""}${(entry.pnl * 100).toFixed(1)}¢`}
+                      : `${entry.pnl >= 0 ? "+" : "−"}$${Math.abs(entry.pnl).toFixed(2)}`}
                   </span>
                 </li>
               );

@@ -20,8 +20,9 @@
  * So this is not a direction forecast. It is a claim about execution: pay no
  * fee, enter patiently, and cut the position the moment the market disagrees.
  *
- * Measured over 30 days and 5760 real 15-minute rounds:
- *   walk-forward          +0.021 per $1, positive in every week
+ * Measured over 30 days and 5760 real 15-minute rounds, per one share bought at
+ * the 0.35 limit (a $1 stake is 2.86 of these):
+ *   walk-forward          +0.021 per share, positive in every week
  *   losing days           3 of 31
  *   after a 2c exit cost  still +0.022
  *   the live book spreads 0.01, so that 2c assumption is conservative
@@ -41,6 +42,55 @@ export const DEFAULT_LIMIT = 0.35;
 export const EXIT_SLIPPAGE = 0.02;
 /** Makers are never charged, and receive this share of collected taker fees. */
 export const MAKER_REBATE = 0.07 * 0.2 * 0.15;
+
+/**
+ * Polymarket does not sell shares — it sells USDC. A $1 order at a 0.35 limit
+ * buys 1 / 0.35 = 2.86 shares, pays out 2.86 if the round goes our way, and
+ * risks the full $1 if it does not.
+ *
+ * This is the single most important accounting fact on these markets, and
+ * getting it wrong is what made an earlier version of this screen look like it
+ * risked 35¢ when it actually risked a dollar. $1 is the smallest order the
+ * books accept; $5 and $10 are the sizes the UI offers above it.
+ */
+export const MIN_STAKE_USD = 1;
+export const STAKE_OPTIONS_USD = [1, 5, 10] as const;
+export type StakeUsd = (typeof STAKE_OPTIONS_USD)[number];
+export const DEFAULT_STAKE_USD: StakeUsd = 1;
+
+/** Shares a USDC stake buys when it fills at `limit`. */
+export function sharesForStake(stake: number, limit: number = DEFAULT_LIMIT): number {
+  return stake / limit;
+}
+
+/**
+ * The walk-forward results, as measured, in USDC per single share bought at
+ * `DEFAULT_LIMIT`. A share costs 0.35, so these convert to a real $1 stake by
+ * dividing by the limit — see `expectedPnlPerStake`.
+ *
+ * Measured over 30 days and 5760 real 15-minute rounds.
+ */
+export const MEASURED_PER_SHARE = {
+  /** Maker entry plus breakeven exit. Positive in every week. */
+  pnlWithExit: 0.021,
+  /** The same fills held to resolution. This is the trap. */
+  pnlEntryOnly: -0.102,
+  /** How often the contract comes back to the limit. */
+  exitRate: 0.91,
+  /** Of the trades that never came back, how many won. */
+  survivorWinRate: 0.76,
+  losingDays: "3 из 31",
+  rounds: 5760,
+} as const;
+
+/** The same measured result expressed on a real USDC stake. */
+export function expectedPnlPerStake(
+  stake: number,
+  limit: number = DEFAULT_LIMIT,
+  perShare: number = MEASURED_PER_SHARE.pnlWithExit,
+): number {
+  return sharesForStake(stake, limit) * perShare;
+}
 
 export type Side = "up" | "down";
 
@@ -70,10 +120,47 @@ export function planMakerTrade(side: Side, limit: number = DEFAULT_LIMIT): Maker
   };
 }
 
-/** P&L in USDC on a $1 stake committed to a contract bought at `limit`. */
+/**
+ * P&L in USDC for ONE share bought at `limit`. This is the raw unit the
+ * backtest works in — a share costs `limit` dollars and pays 1. Real orders are
+ * denominated in USDC, so anything the user sees goes through `stakePnl`.
+ */
 export function makerPnl(limit: number, won: boolean, exited: boolean): number {
   if (exited) return -EXIT_SLIPPAGE + MAKER_REBATE;
   return (won ? 1 - limit : -limit) + MAKER_REBATE;
+}
+
+/**
+ * P&L in USDC on a real order of `stake` dollars, filled at `limit`.
+ *
+ * A $1 stake at 0.35 is 2.86 shares, so the outcomes are:
+ *   won and held   +$1.86   (2.86 shares pay out 2.86 against a $1 cost)
+ *   lost and held  −$1.00   (the whole stake, capped)
+ *   exited         −$0.06   (sold back 2 cents under the limit)
+ *
+ * The risk on a trade is the full stake, not the limit — which is the number
+ * that has to govern position sizing, and the reason the loss side of this
+ * strategy is a fixed, knowable amount rather than an open-ended one.
+ */
+export function stakePnl(
+  stake: number,
+  limit: number,
+  won: boolean,
+  exited: boolean,
+): number {
+  return sharesForStake(stake, limit) * makerPnl(limit, won, exited);
+}
+
+/** What a real stake is worth in each of the three outcomes, for the UI. */
+export function stakeOutcomes(
+  stake: number,
+  limit: number = DEFAULT_LIMIT,
+): { won: number; lost: number; exited: number } {
+  return {
+    won: stakePnl(stake, limit, true, false),
+    lost: stakePnl(stake, limit, false, false),
+    exited: stakePnl(stake, limit, false, true),
+  };
 }
 
 /**
