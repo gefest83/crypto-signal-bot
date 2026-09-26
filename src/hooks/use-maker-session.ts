@@ -1,5 +1,5 @@
-import { api } from "@convex/_generated/api";
-import { pmRoundStart, settledUp, type PmAsset, type PmRound } from "@convex/polymarket";
+import { api } from "../convex/_generated/api";
+import { pmRoundStart, settledUp, type PmAsset, type PmRound } from "../convex/polymarket";
 import { DEFAULT_LIMIT, makerPnl, type Side } from "@/lib/strategy/maker-exit";
 import { useAction, useMutation } from "convex/react";
 import { useCallback, useEffect, useRef, useState } from "react";

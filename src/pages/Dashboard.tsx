@@ -4,7 +4,7 @@ import { MakerJournal } from "@/components/maker/MakerJournal";
 import { MakerRound } from "@/components/maker/MakerRound";
 import { MakerRules } from "@/components/maker/MakerRules";
 import { Button } from "@/components/ui/button";
-import type { PmAsset } from "@convex/polymarket";
+import type { PmAsset } from "../convex/polymarket";
 import { useAuth } from "@/hooks/use-auth";
 import { useMakerSession, type MakerSession } from "@/hooks/use-maker-session";
 import { cn } from "@/lib/utils";
