@@ -135,7 +135,6 @@ export type PaperTotals = {
 
 export type PaperConsole = {
   sessions: Partial<Record<MarketKey, PaperSession>>;
-  journal: PaperJournalEntry[];
   perMarket: MarketStats[];
   totals: PaperTotals;
   now: number;
@@ -433,7 +432,6 @@ export function usePaperSession(
 
   return {
     sessions: sessions as Partial<Record<MarketKey, PaperSession>>,
-    journal: [],
     perMarket,
     totals,
     now,

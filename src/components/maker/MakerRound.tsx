@@ -1,56 +1,63 @@
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
-import type { MakerPhase, MakerSession } from "@/hooks/use-maker-session";
-import { DEFAULT_LIMIT, MARKET_INTERVAL_MIN } from "@/lib/strategy/maker-exit";
+import type { PaperSession, PaperState } from "@/hooks/use-paper-session";
+import { PM_LIMITS, TRADE_FEE_RATE } from "@/lib/strategy/maker-exit";
 import { ArrowDown, ArrowUp, CircleDot, Loader2, Target, X } from "lucide-react";
 
-const ROUND_MS = MARKET_INTERVAL_MIN * 60_000;
-
 /** Where the contract would have to travel for each transition to fire. */
-const STEPS: { phase: MakerPhase; label: string; hint: string }[] = [
-  { phase: "armed", label: "Заявка в стакане", hint: "bid стоит и ждёт продавца" },
-  { phase: "filled", label: "Набито, держим", hint: "ждём возврата к цене входа" },
-  { phase: "exited", label: "Выход в ноль", hint: "цена вернулась к лимиту" },
-  { phase: "held", label: "Держали до расчёта", hint: "цена не возвращалась" },
+const STEPS: { state: PaperState; label: string; hint: string }[] = [
+  { state: "quoting", label: "Заявка в стакане", hint: "bid стоит и ждёт продавца" },
+  { state: "filled", label: "Набито, держим", hint: "ждём возврата к цене входа" },
+  { state: "closing", label: "Выход", hint: "цена вернулась, продаём" },
+  { state: "held", label: "Держали до расчёта", hint: "цена не возвращалась" },
 ];
 
-const ACTIVE_INDEX: Partial<Record<MakerPhase, number>> = {
-  armed: 0,
+const ACTIVE_INDEX: Partial<Record<PaperState, number>> = {
+  quoting: 0,
   filled: 1,
-  exited: 2,
+  closing: 2,
+  closed: 2,
   held: 3,
 };
 
+const usd = (v: number) => `${v < 0 ? "−" : "+"}$${Math.abs(v).toFixed(2)}`;
+
 /**
- * The live state of one maker trade.
+ * One market's live virtual session.
  *
- * The important thing this screen shows is not a direction — there is none. It
- * shows where the resting limit stands relative to the real book, and which of
- * the two transitions has fired. Everything on it is read from the live CLOB,
- * so a price that Gamma would quote stale is never used.
+ * The bar is the entire strategy on one axis: our limit, and where the real
+ * book is relative to it. What matters is not a direction — there is none —
+ * but whether the price ever travels PAST the limit, because a price that
+ * merely touches it leaves the order last in the queue and the fill does not
+ * happen. That is why the limit line is drawn separately from the shading:
+ * reaching the shaded region is not enough.
  */
 export function MakerRound({
-  asset,
+  label,
   session,
   now,
   end,
 }: {
-  asset: string;
-  session: MakerSession | undefined;
+  label: string;
+  session: PaperSession | undefined;
   now: number;
   end: number;
 }) {
   const remaining = Math.max(0, end - now);
-  const progress = 1 - remaining / ROUND_MS;
-  const active = session ? (ACTIVE_INDEX[session.phase] ?? 0) : 0;
+  const progress = Math.min(1, Math.max(0, 1 - remaining / (15 * 60_000)));
+  const active = ACTIVE_INDEX[session?.state ?? "quoting"] ?? 0;
   const up = session?.side === "up";
   const SideIcon = up ? ArrowUp : ArrowDown;
 
-  // Where our limit sits inside the 0-1 contract, as a bar position.
-  const limitPct = (session?.limit ?? DEFAULT_LIMIT) * 100;
+  const limit = session?.limit ?? 0.5;
+  const limitPct = limit * 100;
   const askPct = session?.ask != null ? session.ask * 100 : null;
   const bidPct = session?.bid != null ? session.bid * 100 : null;
+
+  // One tick past the limit is where the fill is credited, so the bar has to
+  // show where that threshold is, not just where the limit is.
+  const fillPct = Math.min(100, (limit - 0.01) * 100);
 
   return (
     <Card>
@@ -62,7 +69,7 @@ export function MakerRound({
             </span>
             <div>
               <h2 className="text-sm font-semibold tracking-tight">
-                {asset} · лимит {session?.limit.toFixed(2) ?? "—"}
+                {label} · лимит {session?.limit.toFixed(2) ?? "—"}
               </h2>
               <p className="text-[11px] text-muted-foreground">
                 {session?.side ? (
@@ -75,7 +82,7 @@ export function MakerRound({
                 )}
                 {session && (
                   <span className="ms-2 font-mono">
-                    стейк ${session.stake} · {(1 / session.limit).toFixed(2)} шар
+                    стейк ${session.stake} · {(session.stake / session.limit).toFixed(2)} шар
                   </span>
                 )}
               </p>
@@ -87,15 +94,16 @@ export function MakerRound({
                 variant="outline"
                 className={cn(
                   "font-mono text-[11px]",
-                  session.phase === "exited" && "border-amber-500/30 text-amber-500",
-                  session.phase === "filled" && "border-sky-500/30 text-sky-500",
+                  session.state === "closed" && "border-amber-500/30 text-amber-500",
+                  session.state === "filled" && "border-sky-500/30 text-sky-500",
                 )}
               >
-                {session.phase}
+                {session.state}
               </Badge>
             )}
             <span className="font-mono text-xs tabular-nums text-muted-foreground">
-              {Math.floor(remaining / 60_000)}:{String(Math.floor((remaining % 60_000) / 1000)).padStart(2, "0")}
+              {Math.floor(remaining / 60_000)}:
+              {String(Math.floor((remaining % 60_000) / 1000)).padStart(2, "0")}
             </span>
           </div>
         </header>
@@ -105,12 +113,18 @@ export function MakerRound({
           <div className="relative h-14 overflow-hidden rounded-lg border border-border/60 bg-card/40">
             <div
               className="absolute inset-y-0 left-0 bg-primary/15"
-              style={{ width: `${Math.min(100, Math.max(0, limitPct))}%` }}
+              style={{ width: `${limitPct}%` }}
             />
+            {/* The band a price must cross, not reach, for the fill to count. */}
             <div
               className="absolute inset-y-0 w-px bg-primary"
+              style={{ left: `${fillPct}%` }}
+              title={`порог набития ${(limit - 0.01).toFixed(2)}`}
+            />
+            <div
+              className="absolute inset-y-0 w-px bg-primary/70"
               style={{ left: `${limitPct}%` }}
-              title={`наш лимит ${session?.limit.toFixed(2)}`}
+              title={`наш лимит ${limit.toFixed(2)}`}
             />
             {askPct !== null && (
               <div
@@ -133,12 +147,14 @@ export function MakerRound({
               1.00
             </span>
           </div>
-          <div className="mt-1.5 flex items-center justify-between text-[10px] text-muted-foreground">
+          <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2 text-[10px] text-muted-foreground">
             <span className="inline-flex items-center gap-1">
               <span className="size-2 rounded-full bg-up" /> ask{" "}
               {session?.ask?.toFixed(2) ?? "—"}
             </span>
-            <span>наш лимит {session?.limit.toFixed(2) ?? "—"}</span>
+            <span>
+              набитие при ask ≤ {(limit - 0.01).toFixed(2)} · лимит {limit.toFixed(2)}
+            </span>
             <span className="inline-flex items-center gap-1">
               bid {session?.bid?.toFixed(2) ?? "—"}
               <span className="size-2 rounded-full bg-down" />
@@ -148,7 +164,7 @@ export function MakerRound({
 
         {/* Round progress. */}
         <div className="h-1 overflow-hidden rounded-full bg-muted">
-          <div className="h-full bg-primary/60" style={{ width: `${Math.min(100, progress * 100)}%` }} />
+          <div className="h-full bg-primary/60" style={{ width: `${progress * 100}%` }} />
         </div>
 
         {/* The state machine. */}
@@ -158,7 +174,7 @@ export function MakerRound({
             const current = index === active;
             return (
               <li
-                key={step.phase}
+                key={step.state}
                 className={cn(
                   "rounded-lg border px-3 py-2 transition-colors",
                   current
@@ -185,22 +201,30 @@ export function MakerRound({
                     {step.label}
                   </span>
                 </div>
-                <p className="mt-0.5 text-[10px] leading-tight text-muted-foreground">{step.hint}</p>
+                <p className="mt-0.5 text-[10px] leading-tight text-muted-foreground">
+                  {step.hint}
+                </p>
               </li>
             );
           })}
         </ol>
 
         <p className="rounded-lg border border-border/60 bg-card/40 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
-          {session?.note ?? "Загрузка стакана Polymarket…"}
+          {session?.note ?? "Загрузка стакана…"}
         </p>
+
+        {session?.shares != null && (
+          <p className="font-mono text-[11px] text-muted-foreground">
+            {session.shares.toFixed(2)} шар по {session.limit.toFixed(2)} · комиссия{" "}
+            {((session.stake * TRADE_FEE_RATE) * 100).toFixed(1)}¢ на входе
+          </p>
+        )}
 
         {session?.pnl != null && (
           <p className="font-mono text-xs text-muted-foreground">
-            P&amp;L сделки на ${session.stake}:{" "}
+            P&amp;L на ${session.stake}:{" "}
             <span className={session.pnl >= 0 ? "text-emerald-500" : "text-rose-500"}>
-              {session.pnl >= 0 ? "+" : "−"}$
-              {Math.abs(session.pnl).toFixed(2)}
+              {usd(session.pnl)}
             </span>
           </p>
         )}
@@ -208,3 +232,5 @@ export function MakerRound({
     </Card>
   );
 }
+
+export { PM_LIMITS };

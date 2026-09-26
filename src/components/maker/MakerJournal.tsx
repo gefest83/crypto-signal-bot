@@ -1,87 +1,61 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import type { MakerLogEntry } from "@/hooks/use-maker-session";
-import { History } from "lucide-react";
-
-const LABEL: Record<MakerLogEntry["phase"], string> = {
-  armed: "заявка стояла",
-  filled: "не закрыта",
-  exited: "выход в ноль",
-  held: "держали до расчёта",
-  missed: "лимит не набит",
-};
+import { MARKET_PROFILES, PM_LIMITS } from "@/lib/strategy/maker-exit";
+import { Info } from "lucide-react";
 
 /**
- * Closed maker trades, graded on Polymarket's own published result.
+ * Why there is no trade journal here any more.
  *
- * A trade that was given back at its entry price is shown as a flat round trip,
- * not as a loss. That distinction is the whole strategy, and flattening it here
- * would be the same accounting error the backtest nearly shipped.
+ * This card used to list closed trades, graded by the old session hook, which
+ * credited a fill the moment the ask TOUCHED our limit. That is the generous
+ * reading and it was wrong in an expensive way: a resting order last in a
+ * queue at 0.50 is not filled by a price that arrives at 0.50, and the
+ * backtest assumed otherwise everywhere it counted money.
+ *
+ * The four-market paper panel above replaced it. It keeps a journal, but every
+ * entry there required the price to penetrate the limit by a tick before the
+ * fill counted, and the commission is charged on entry AND exit. Showing the
+ * old journal next to the new numbers would put two contradictory ledgers on
+ * one screen, and the more flattering one is exactly the one that would get
+ * believed.
  */
-export function MakerJournal({ log }: { log: MakerLogEntry[] }) {
-  const closed = log.filter((entry) => entry.phase === "exited" || entry.phase === "held");
-  const total = closed.reduce((sum, entry) => sum + (entry.pnl ?? 0), 0);
-
+export function MakerJournal() {
   return (
     <Card>
       <CardHeader>
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <CardTitle className="flex items-center gap-2 text-base">
-            <History className="size-4" />
-            Журнал сделок
-          </CardTitle>
-          {closed.length > 0 && (
-            <span className="font-mono text-xs text-muted-foreground">
-              {closed.length} закрыто ·{" "}
-              <span className={total >= 0 ? "text-emerald-500" : "text-rose-500"}>
-                {total >= 0 ? "+" : "−"}${Math.abs(total).toFixed(2)}
-              </span>
-            </span>
-          )}
-        </div>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Info className="size-4" />
+          Журнал ведётся в панели выше
+        </CardTitle>
       </CardHeader>
       <CardContent>
-        {log.length === 0 ? (
-          <p className="py-6 text-center text-xs leading-relaxed text-muted-foreground">
-            Закрытых раундов пока нет.            Журнал заполняется, когда лимит набирается и сделка
-            закрывается. Суммы указаны в USDC на реальный стейк, а не на условный юнит.
-          </p>
-        ) : (
-          <ul className="flex flex-col divide-y divide-border/60">
-            {log.map((entry) => {
-              const when = new Date(entry.roundStart * 1000);
-              return (
-                <li key={entry.id} className="flex items-center gap-3 py-2.5 text-xs">
-                  <span className="w-11 shrink-0 font-mono text-muted-foreground">
-                    {when.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}
-                  </span>
-                  <span className="w-9 shrink-0 font-mono uppercase">
-                    {entry.asset}
-                    <span className="ml-1 text-muted-foreground">{entry.side ?? "—"}</span>
-                  </span>
-                  <span className="w-20 shrink-0 font-mono text-muted-foreground">
-                    {entry.limit.toFixed(2)} · ${entry.stake}
-                  </span>
-                  <span className="min-w-0 flex-1 truncate text-muted-foreground">
-                    {LABEL[entry.phase]}
-                  </span>
-                  <span
-                    className={`shrink-0 font-mono ${
-                      entry.pnl == null
-                        ? "text-muted-foreground"
-                        : entry.pnl >= 0
-                          ? "text-emerald-500"
-                          : "text-rose-500"
-                    }`}
-                  >
-                    {entry.pnl == null
-                      ? "—"
-                      : `${entry.pnl >= 0 ? "+" : "−"}$${Math.abs(entry.pnl).toFixed(2)}`}
-                  </span>
-                </li>
-              );
-            })}
-          </ul>
-        )}
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          Раньше здесь был список закрытых сделок. Он удалён, потому что засчитывал набитие в
+          момент касания лимита — то есть приписывал виртуальной заявке наполнение, которого в
+          реальной очереди может и не быть. Сейчас журнал ведётся в панели виртуальных сделок,
+          где набитие требует, чтобы цена прошла уровень на тик глубже, а комиссия платится дважды.
+        </p>
+        <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
+          Панель не убирает статистику, а показывает её по каждому рынку отдельно: 5m и 15m ведут
+          себя по-разному, и среднее между ними не описывает ни один из них. Общий P&L считается
+          отдельно и показан рядом с частями.
+        </p>
+        <dl className="mt-4 grid gap-2 sm:grid-cols-2">
+          {([5, 15] as const).map((interval) => {
+            const profile = MARKET_PROFILES[interval];
+            return (
+              <div key={interval} className="rounded-lg border border-border/60 bg-card/40 px-3 py-2">
+                <p className="text-[11px] font-medium">
+                  {profile.label} · лимит {PM_LIMITS[interval].toFixed(2)}
+                </p>
+                <p className="mt-0.5 font-mono text-[11px] text-muted-foreground">
+                  возврат {(profile.exitRate * 100).toFixed(0)}% · удержавшиеся{" "}
+                  {(profile.survivorWinRate * 100).toFixed(0)}% · обнуление при{" "}
+                  {(profile.breakEvenSlippage * 100).toFixed(0)}ц
+                </p>
+              </div>
+            );
+          })}
+        </dl>
       </CardContent>
     </Card>
   );

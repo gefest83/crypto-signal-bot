@@ -6,14 +6,18 @@ import { MakerStats } from "@/components/maker/MakerStats";
 import { MakerRules } from "@/components/maker/MakerRules";
 import { PaperPanel } from "@/components/maker/PaperPanel";
 import { Button } from "@/components/ui/button";
-import type { PmAsset } from "../convex/polymarket";
+import type { PmInterval } from "../convex/polymarket";
 import { useAuth } from "@/hooks/use-auth";
-import { useMakerSession, type MakerSession } from "@/hooks/use-maker-session";
-import { usePaperSession } from "@/hooks/use-paper-session";
+import {
+  MARKETS,
+  usePaperSession,
+  type MarketStats,
+  type PaperSession,
+} from "@/hooks/use-paper-session";
 import { DEFAULT_PAPER } from "@/lib/strategy/paper";
 import {
-  DEFAULT_LIMIT,
   MIN_ORDER_SHARES,
+  PM_LIMITS,
   STAKE_OPTIONS_USD,
   stakeOutcomes,
   type StakeUsd,
@@ -23,17 +27,19 @@ import { LogOut } from "lucide-react";
 import { useState } from "react";
 import { useNavigate } from "react-router";
 
-const ASSETS: { id: PmAsset; label: string }[] = [
-  { id: "btc", label: "BTC" },
-  { id: "eth", label: "ETH" },
-];
+/** The end of the round containing `now`, for one interval. */
+function roundEnd(now: number, interval: PmInterval): number {
+  const start = Math.floor(now / 1000 / (interval * 60)) * (interval * 60) * 1000;
+  return start + interval * 60_000;
+}
 
 const PHASE_HINT: Record<string, string> = {
-  armed: "заявка в стакане",
+  quoting: "заявка в стакане",
   filled: "набито, держим",
-  exited: "выход",
+  closing: "ждём выход",
+  closed: "выход",
   held: "держали",
-  missed: "не набито",
+  missed: "не набилась",
 };
 
 /**
@@ -52,7 +58,7 @@ function StakeSwitch({
   stake: StakeUsd;
   onSelect: (next: StakeUsd) => void;
 }) {
-  const outcomes = stakeOutcomes(stake, DEFAULT_LIMIT);
+  const outcomes = stakeOutcomes(stake, PM_LIMITS[5]);
 
   return (
     <div className="flex flex-wrap items-center gap-2">
@@ -85,45 +91,87 @@ function StakeSwitch({
   );
 }
 
-function AssetSwitch({
-  asset,
+/**
+ * One tab per market, all four of them.
+ *
+ * The tabs used to be BTC and ETH only, because there was only one interval
+ * running. Now that both 5m and 15m are live, hiding them behind a single
+ * "asset" switch would make it impossible to see which of the four a number
+ * came from — and that distinction is the whole reason the markets are
+ * measured separately. So every market gets its own tab, each labelled with
+ * its interval and its own limit, because 0.50 and 0.35 are not the same trade.
+ */
+function MarketSwitch({
+  active,
   onSelect,
   sessions,
+  perMarket,
 }: {
-  asset: PmAsset;
-  onSelect: (next: PmAsset) => void;
-  sessions: Partial<Record<PmAsset, MakerSession>>;
+  active: string;
+  onSelect: (key: string) => void;
+  sessions: Partial<Record<string, PaperSession>>;
+  perMarket: MarketStats[];
 }) {
+  const realisedOf = new Map(perMarket.map((s) => [s.key, s.realised]));
+  const fillsOf = new Map(perMarket.map((s) => [s.key, s.fills]));
+
   return (
     <div className="flex flex-wrap items-center gap-2">
-      {ASSETS.map((option) => {
-        const active = option.id === asset;
-        const session = sessions[option.id];
+      {MARKETS.map((market) => {
+        const isActive = market.key === active;
+        const session = sessions[market.key];
+        const limit = PM_LIMITS[market.interval];
+        const realised = realisedOf.get(market.key) ?? 0;
+        const fills = fillsOf.get(market.key) ?? 0;
         return (
           <button
-            key={option.id}
+            key={market.key}
             type="button"
-            onClick={() => onSelect(option.id)}
+            onClick={() => onSelect(market.key)}
             className={cn(
-              "flex items-center gap-3 rounded-xl border px-4 py-2.5 transition-colors",
-              active
+              "flex items-center gap-2.5 rounded-xl border px-3.5 py-2.5 transition-colors",
+              isActive
                 ? "border-primary/40 bg-primary/5"
                 : "border-border bg-card hover:bg-muted/50",
             )}
           >
-            <span className="text-sm font-semibold tracking-tight">{option.label}</span>
+            <span className="text-sm font-semibold tracking-tight">
+              {market.asset.toUpperCase()}
+            </span>
+            <span
+              className={cn(
+                "rounded px-1.5 py-0.5 font-mono text-[10px]",
+                market.interval === 5
+                  ? "bg-sky-500/15 text-sky-500"
+                  : "bg-amber-500/15 text-amber-500",
+              )}
+            >
+              {market.interval}m
+            </span>
             <span className="font-mono text-[11px] text-muted-foreground">
-              {PHASE_HINT[session?.phase ?? "armed"]}
+              {PHASE_HINT[session?.state ?? "quoting"]}
             </span>
             <span className="font-mono text-xs tabular-nums text-muted-foreground">
               {session?.ask != null ? session.ask.toFixed(2) : "—"}
             </span>
+            <span
+              className={cn(
+                "font-mono text-[11px] tabular-nums",
+                fills === 0
+                  ? "text-muted-foreground/60"
+                  : realised >= 0
+                    ? "text-emerald-500"
+                    : "text-rose-500",
+              )}
+            >
+              {fills === 0 ? "—" : `${realised >= 0 ? "+" : "−"}$${Math.abs(realised).toFixed(2)}`}
+            </span>
+            <span className="font-mono text-[10px] text-muted-foreground/60">
+              {limit.toFixed(2)}
+            </span>
           </button>
         );
       })}
-      <span className="ms-auto hidden text-[11px] text-muted-foreground sm:block">
-        Лимит {DEFAULT_LIMIT.toFixed(2)} · вход без тейкерской комиссии · выход в безубыток
-      </span>
     </div>
   );
 }
@@ -131,10 +179,10 @@ function AssetSwitch({
 export default function Dashboard() {
   const { user, signOut } = useAuth();
   const navigate = useNavigate();
-  const [asset, setAsset] = useState<PmAsset>("btc");
+  const [market, setMarket] = useState<string>(MARKETS[0].key);
   const [stake, setStake] = useState<StakeUsd>(5);
-  const maker = useMakerSession(DEFAULT_LIMIT, stake);
   const paper = usePaperSession(stake, DEFAULT_PAPER);
+  const selected = MARKETS.find((m) => m.key === market) ?? MARKETS[0];
 
   const handleSignOut = async () => {
     await signOut();
@@ -149,7 +197,7 @@ export default function Dashboard() {
           <div className="min-w-0">
             <p className="text-sm leading-tight font-semibold tracking-tight">Maker Exit</p>
             <p className="truncate text-[11px] leading-tight text-muted-foreground">
-              Вход без тейкерской комиссии · выход в безубыток · 5-минутные раунды
+              Вход без тейкерской комиссии · выход в безубыток · рынки 5m и 15m
             </p>
           </div>
           <div className="ms-auto flex items-center gap-3">
@@ -172,13 +220,19 @@ export default function Dashboard() {
 
       <main className="mx-auto flex w-full max-w-6xl flex-col gap-5 px-4 py-6 sm:px-6 sm:py-8">
         <StakeSwitch stake={stake} onSelect={setStake} />
-        <AssetSwitch asset={asset} onSelect={setAsset} sessions={maker.sessions} />
+        <MarketSwitch
+          active={market}
+          onSelect={setMarket}
+          sessions={paper.sessions}
+          perMarket={paper.perMarket}
+        />
 
         <MakerRound
-          asset={asset.toUpperCase()}
-          session={maker.sessions[asset]}
-          now={maker.now}
-          end={maker.end}
+          key={selected.key}
+          label={`${selected.asset.toUpperCase()} ${selected.interval}m`}
+          session={paper.sessions[selected.key]}
+          now={paper.now}
+          end={roundEnd(paper.now, selected.interval)}
         />
 
         <MakerStats stake={stake} />
@@ -196,7 +250,7 @@ export default function Dashboard() {
           penetrationTicks={paper.settings.penetrationTicks}
         />
 
-        <MakerJournal log={maker.log} />
+        <MakerJournal />
 
         <p className="pb-2 text-center text-[11px] leading-relaxed text-muted-foreground">
           Все переходы считаются по настоящему стакану Polymarket. Ордера не отправляются: консоль
