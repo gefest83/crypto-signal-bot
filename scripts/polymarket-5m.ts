@@ -478,7 +478,7 @@ async function main() {
       [0.9, 0.95],
       [0.95, 1.01],
     ];
-    const rows: { side: number; won: boolean }[] = [];
+    const rows: { side: number; won: boolean; t0: number; asset: string }[] = [];
 
     for (const round of rounds) {
       if (round.upWon === null) continue;
@@ -492,7 +492,7 @@ async function main() {
       const sideFirst = upFirst ? first.p : 1 - first.p;
       if (sideFirst < 0.8) continue; // only ever a confirmed favourite first
       const sideSecond = upSecond ? second.p : 1 - second.p;
-      rows.push({ side: sideSecond, won: upFirst === round.upWon });
+      rows.push({ side: sideSecond, won: upFirst === round.upWon, t0: round.t0, asset: round.asset });
     }
 
     console.log(`\n=== вход на t+120 после падения фаворита с >=0.80 (${rows.length} раундов) ===`);
@@ -518,6 +518,33 @@ async function main() {
           `${net >= 0 ? "+" : ""}${net.toFixed(4)}`.padStart(12),
         ].join("  "),
       );
+    }
+    // The band that matters, checked for the usual decay across time blocks.
+    const best = rows.filter((r) => r.side >= 0.7 && r.side < 0.8);
+    if (best.length > 0) {
+      const score = (picked: typeof rows) => {
+        if (picked.length === 0) return null;
+        const n = picked.length;
+        const hits = picked.filter((r) => r.won).length;
+        const avg = picked.reduce((a, r) => a + r.side, 0) / n;
+        return { n, net: hits / n - (avg + 0.005) - fee(avg) };
+      };
+      const times = rows.map((r) => r.t0).sort((a, b) => a - b);
+      const span = times[times.length - 1] - times[0] || 1;
+      console.log(`\n--- устойчивость полосы 0.70-0.80 (${best.length} сделок) ---`);
+      for (let b = 0; b < 5; b += 1) {
+        const lo = times[0] + (span * b) / 5;
+        const hi = times[0] + (span * (b + 1)) / 5;
+        const s = score(best.filter((r) => r.t0 >= lo && r.t0 < hi));
+        if (!s) continue;
+        const day = new Date(lo * 1000).toISOString().slice(5, 10);
+        console.log(`  блок ${b + 1} (с ${day})  n=${String(s.n).padStart(3)}  net=${s.net >= 0 ? "+" : ""}${s.net.toFixed(4)}`);
+      }
+      for (const asset of ASSETS) {
+        const s = score(best.filter((r) => r.asset === asset));
+        if (!s) continue;
+        console.log(`  ${asset.toUpperCase()}  n=${String(s.n).padStart(3)}  net=${s.net >= 0 ? "+" : ""}${s.net.toFixed(4)}`);
+      }
     }
     return;
   }
