@@ -1,5 +1,6 @@
 import { LogoDropdown } from "@/components/LogoDropdown";
 import { FactorBars } from "@/components/signal/FactorBars";
+import { MakerPanel } from "@/components/signal/MakerPanel";
 import { RoundHistory } from "@/components/signal/RoundHistory";
 import { SignalHero } from "@/components/signal/SignalHero";
 import { StrategyRules } from "@/components/signal/StrategyRules";
@@ -140,6 +141,12 @@ export default function Dashboard() {
           windowEnd={signalConsole.end}
           feedStatus={signalConsole.feedStatus}
           feedDetail={signalConsole.feedDetail}
+        />
+
+        <MakerPanel
+          asset={symbol.replace("USDT", "")}
+          price={signalConsole.rounds[asset]?.upAsk ?? null}
+          holding={false}
         />
 
         <div className="grid gap-5 lg:grid-cols-2 lg:items-start">

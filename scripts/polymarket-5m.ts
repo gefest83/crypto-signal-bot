@@ -36,7 +36,8 @@ const CLOB = "https://clob.polymarket.com";
  */
 const INTERVAL = Number(process.argv[2] ?? 5);
 const command = process.argv[4] ?? "analyse";
-const ROUND_S = INTERVAL * 300;
+/** A 15m round is 900 seconds. INTERVAL is the market length in minutes. */
+const ROUND_S = INTERVAL * 60;
 /** Enter 20% into the round: the market has moved but has not settled. */
 const ENTRY_MS = Math.round(INTERVAL * 60 * 1000 * 0.2);
 const CONFIRM_MS = Math.round(INTERVAL * 60 * 1000 * 0.4);
