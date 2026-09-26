@@ -617,6 +617,55 @@ async function main() {
     return;
   }
 
+  if (command === "control") {
+    // Engine-free control. The strategy's whole bet is "the round continues the
+    // direction the opening minute moved". Measure that raw edge directly, with
+    // no engine, no factors and no guards — so a mechanical edge ("the price is
+    // already on one side of the round open, so it more often finishes there")
+    // cannot hide behind a 73% headline.
+    const rows: { move: number; settledUp: boolean }[] = [];
+    for (const round of rounds) {
+      const candles = bySymbol.get(round.symbol)!;
+      const i = round.index;
+      const atr = Math.max(
+        candles
+          .slice(Math.max(0, i - 14), i)
+          .reduce((a, c) => a + (c.high - c.low) / c.close, 0) / 14,
+        1e-6,
+      );
+      const firstMinuteMove = (candles[i].close - candles[i].open) / candles[i].open;
+      const roundMove = candles[i + 4].close - candles[i].open;
+      rows.push({ move: firstMinuteMove / atr, settledUp: roundMove > 0 });
+    }
+    const upRate = rows.filter((r) => r.settledUp).length / rows.length;
+    console.log(`${rows.length} rounds · unconditional P(up) = ${(upRate * 100).toFixed(1)}%`);
+    console.log(
+      [
+        "|1st-min move|".padEnd(16),
+        "rounds".padStart(7),
+        "continuation".padStart(13),
+        "reversion".padStart(10),
+      ].join(" "),
+    );
+    for (const k of [0, 0.25, 0.5, 0.75, 1, 1.5]) {
+      const picked = rows.filter((r) => Math.abs(r.move) >= k);
+      const contWin = picked.filter((r) => (r.move > 0) === r.settledUp).length;
+      const revertWin = picked.length - contWin;
+      console.log(
+        [
+          `>= ${k} ATR`.padEnd(16),
+          String(picked.length).padStart(7),
+          `${((contWin / picked.length) * 100).toFixed(1)}%`.padStart(13),
+          `${((revertWin / picked.length) * 100).toFixed(1)}%`.padStart(10),
+        ].join(" "),
+      );
+    }
+    console.log(
+      "\ncontinuation = betting the round finishes the way its 1st minute moved",
+    );
+    return;
+  }
+
   const results: { label: string; stats: RunStats }[] = [];
   for (const config of sweepGrid()) {
     for (const invert of [false, true]) {
