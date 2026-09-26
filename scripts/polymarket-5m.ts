@@ -130,11 +130,20 @@ async function loadRound(asset: Asset, t0: number): Promise<Round> {
   }
 }
 
+const CACHE_FILE = join(CACHE_DIR, "polymarket-5m-cache.json");
+
+/**
+ * Fetch any rounds in the window that are not cached yet and merge them into a
+ * single growing cache. Re-running with a bigger window only downloads the new
+ * days, so we can accumulate history in chunks that fit the command timeout.
+ */
 async function loadAll(days: number): Promise<Round[]> {
   mkdirSync(CACHE_DIR, { recursive: true });
-  const file = join(CACHE_DIR, `polymarket-${days}d.json`);
-  if (existsSync(file)) {
-    return JSON.parse(readFileSync(file, "utf8")) as Round[];
+  const cache = new Map<string, Round>();
+  if (existsSync(CACHE_FILE)) {
+    for (const round of JSON.parse(readFileSync(CACHE_FILE, "utf8")) as Round[]) {
+      cache.set(`${round.asset}-${round.t0}`, round);
+    }
   }
 
   const nowS = Math.floor(Date.now() / 1000);
@@ -142,24 +151,36 @@ async function loadAll(days: number): Promise<Round[]> {
   const lastStart = Math.floor((nowS - 2 * ROUND_S) / ROUND_S) * ROUND_S;
   const firstStart = lastStart - days * 24 * 60 * 60;
 
-  const jobs: { asset: Asset; t0: number }[] = [];
+  const jobs: { asset: Asset; t0: number; key: string }[] = [];
   for (let t0 = firstStart; t0 < lastStart; t0 += ROUND_S) {
-    for (const asset of ASSETS) jobs.push({ asset, t0 });
+    for (const asset of ASSETS) {
+      const key = `${asset}-${t0}`;
+      const cached = cache.get(key);
+      if (cached && cached.upWon !== null) continue;
+      jobs.push({ asset, t0, key });
+    }
   }
-  console.log(`fetching ${jobs.length} rounds (${days}d, BTC+ETH)...`);
 
-  let done = 0;
-  const rounds = await pool(jobs, 8, async ({ asset, t0 }) => {
-    const round = await loadRound(asset, t0);
-    done += 1;
-    if (done % 200 === 0) console.log(`  ${done}/${jobs.length}`);
-    return round;
-  });
+  if (jobs.length > 0) {
+    console.log(`fetching ${jobs.length} new rounds (window ${days}d)...`);
+    let done = 0;
+    await pool(jobs, 10, async ({ asset, t0, key }) => {
+      cache.set(key, await loadRound(asset, t0));
+      done += 1;
+      if (done % 400 === 0) console.log(`  ${done}/${jobs.length}`);
+    });
+    writeFileSync(CACHE_FILE, JSON.stringify([...cache.values()]));
+  }
 
-  const usable = rounds.filter((r) => r.upWon !== null);
-  writeFileSync(file, JSON.stringify(usable));
-  console.log(`cached ${usable.length} resolved rounds -> ${file}`);
-  return usable;
+  const result: Round[] = [];
+  for (let t0 = firstStart; t0 < lastStart; t0 += ROUND_S) {
+    for (const asset of ASSETS) {
+      const round = cache.get(`${asset}-${t0}`);
+      if (round) result.push(round);
+    }
+  }
+  console.log(`window ${days}d: ${result.length} rounds (${result.filter((r) => r.upWon !== null).length} resolved)`);
+  return result.filter((round) => round.upWon !== null);
 }
 
 /** The entry price we would actually have paid: the first quote at or after `at`. */
@@ -366,6 +387,84 @@ async function main() {
 
   if (process.argv[3] === "engine") {
     runEngineJoin(rounds, 30);
+    return;
+  }
+
+  if (process.argv[3] === "favorite") {
+    const at = Number(process.argv[4] ?? 60);
+    const usable = rounds
+      .map((round) => ({ round, p: priceAt(round, at) }))
+      .filter((row): row is { round: Round; p: number } => row.p !== null);
+    console.log(`\n=== buy the side priced >= X at t+${at}s (${usable.length} rounds) ===`);
+    console.log("X       n     hit rate   avg cost   EV/trade      se");
+    for (const th of [0.6, 0.7, 0.75, 0.8, 0.85, 0.9]) {
+      const picks: { cost: number; payoff: number }[] = [];
+      for (const { round, p } of usable) {
+        if (p >= th) picks.push({ cost: p, payoff: round.upWon ? 1 : 0 });
+        else if (1 - p >= th) picks.push({ cost: 1 - p, payoff: round.upWon ? 0 : 1 });
+      }
+      if (picks.length < 20) continue;
+      const n = picks.length;
+      const hit = picks.reduce((a, x) => a + x.payoff, 0) / n;
+      const cost = picks.reduce((a, x) => a + x.cost, 0) / n;
+      const ev = hit - cost;
+      const sd = Math.sqrt(picks.reduce((a, x) => a + (x.payoff - hit) ** 2, 0) / n);
+      console.log(
+        [
+          th.toFixed(2).padEnd(6),
+          String(n).padStart(5),
+          `${(hit * 100).toFixed(1)}%`.padStart(11),
+          cost.toFixed(3).padStart(10),
+          `${ev >= 0 ? "+" : ""}${ev.toFixed(4)}`.padStart(12),
+          (sd / Math.sqrt(n)).toFixed(4).padStart(8),
+        ].join("  "),
+      );
+    }
+    // Stability: same rule (>= 0.80) split into time blocks and per asset.
+    const TH = 0.8;
+    const pick = (round: Round, p: number) =>
+      p >= TH
+        ? { cost: p, payoff: round.upWon ? 1 : 0 }
+        : 1 - p >= TH
+          ? { cost: 1 - p, payoff: round.upWon ? 0 : 1 }
+          : null;
+    const starts = usable.map((u) => u.round.t0).sort((a, b) => a - b);
+    const span = starts[starts.length - 1] - starts[0] || 1;
+    const blocks = 5;
+    console.log(`\n--- rule >= ${TH}: stability ---`);
+    for (let b = 0; b < blocks; b += 1) {
+      const lo = starts[0] + (span * b) / blocks;
+      const hi = starts[0] + (span * (b + 1)) / blocks;
+      const picks = usable
+        .filter((u) => u.round.t0 >= lo && u.round.t0 < hi)
+        .map((u) => pick(u.round, u.p))
+        .filter((x): x is { cost: number; payoff: number } => x !== null);
+      if (picks.length === 0) continue;
+      const n = picks.length;
+      const ev = picks.reduce((a, x) => a + x.payoff - x.cost, 0) / n;
+      const day = new Date(lo * 1000).toISOString().slice(5, 10);
+      console.log(
+        `  block ${b + 1} (from ${day})  n=${String(n).padStart(4)}  EV=${ev >= 0 ? "+" : ""}${ev.toFixed(4)}`,
+      );
+    }
+    for (const asset of ASSETS) {
+      const picks = usable
+        .filter((u) => u.round.asset === asset)
+        .map((u) => pick(u.round, u.p))
+        .filter((x): x is { cost: number; payoff: number } => x !== null);
+      if (picks.length === 0) continue;
+      const ev = picks.reduce((a, x) => a + x.payoff - x.cost, 0) / picks.length;
+      console.log(
+        `  ${asset.toUpperCase()}  n=${String(picks.length).padStart(4)}  EV=${ev >= 0 ? "+" : ""}${ev.toFixed(4)}`,
+      );
+    }
+    return;
+  }
+
+  if (process.argv[3] === "timing") {
+    // Where along the round is the price cheapest relative to the outcome?
+    // EV of buying UP at each available quote.
+    for (const at of [0, 60, 120, 180, 240]) analyse(rounds, at);
     return;
   }
 
