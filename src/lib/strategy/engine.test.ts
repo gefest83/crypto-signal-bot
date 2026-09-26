@@ -24,7 +24,7 @@ import {
 /* ------------------------------------------------------------------ */
 
 const BASE = 65_000; // BTC-ish price level
-const OPEN = 1_770_000_000_000; // aligned to a 5-minute mark
+const OPEN = 1_769_999_400_000; // aligned to a 15-minute mark
 
 const candle = (openTime: number, close: number, overrides: Partial<Candle> = {}): Candle => {
   const open = overrides.open ?? close;
@@ -124,7 +124,7 @@ function evaluate(candles: Candle[], price: number, now: number, symbol: MarketS
  * (t ≥ 60s) but the entry window is still open (t < 120s). Publishable calls
  * only exist here.
  */
-const IN_WINDOW = OPEN + 75_000;
+const IN_WINDOW = OPEN + 240_000;
 
 /* ------------------------------------------------------------------ */
 /* engine tests                                                        */
@@ -153,10 +153,10 @@ describe("evaluateSignal — входные данные", () => {
 });
 
 describe("evaluateSignal — окна раундов", () => {
-  it("окно раунда привязано к 5-минутной отметке UTC", () => {
+  it("окно раунда привязано к 15-минутной отметке UTC", () => {
     const candles = risingCandles(60);
-    // 2 минуты 10 секунд после начала раунда OPEN.
-    const now = OPEN + 130_000;
+    // 3 минуты 10 секунд после начала раунда OPEN.
+    const now = OPEN + 190_000;
     const readout = evaluate(candles, BASE, now);
     expect(readout).not.toBeNull();
     expect(readout?.windowStart).toBe(OPEN);
@@ -173,7 +173,7 @@ describe("evaluateSignal — окна раундов", () => {
     expect(readout?.phase).toBe("prepare");
 
     const confirmed = evaluate(candles, BASE, IN_WINDOW);
-    expect(confirmed?.elapsedMs).toBe(75_000);
+    expect(confirmed?.elapsedMs).toBe(240_000);
     expect(confirmed?.phase).toBe("early");
   });
 });
@@ -300,15 +300,15 @@ describe("evaluateSignal — фазы раунда", () => {
     expect(evaluate(candles, price, OPEN + ENTRY_CUTOFF_MS - 1)?.phase).toBe("mid");
   });
 
-  it("phase=late после 150 секунд", () => {
+  it("phase=late после закрытия окна", () => {
     expect(evaluate(candles, price, OPEN + ENTRY_CUTOFF_MS)?.phase).toBe("late");
-    expect(evaluate(candles, price, OPEN + 299_000)?.phase).toBe("late");
+    expect(evaluate(candles, price, OPEN + ROUND_MS - 1_000)?.phase).toBe("late");
   });
 
   it("эффективная уверенность затухает по фазам (early ≥ mid ≥ late)", () => {
-    const early = evaluate(candles, price, OPEN + 90_000)!;
-    const mid = evaluate(candles, price, OPEN + 150_000)!;
-    const late = evaluate(candles, price, OPEN + 200_000)!;
+    const early = evaluate(candles, price, OPEN + 200_000)!;
+    const mid = evaluate(candles, price, OPEN + 500_000)!;
+    const late = evaluate(candles, price, OPEN + 700_000)!;
 
     expect(early.phase).toBe("early");
     expect(early.effectiveConfidence).toBe(early.confidence);
@@ -319,7 +319,7 @@ describe("evaluateSignal — фазы раунда", () => {
   it("поздняя фаза не публикует новых направлений (декей 0.58 не даёт пройти порог 60)", () => {
     // Даже сильный тренд не даёт уверенности ≥ 60 в late-фазе при декее 0.58,
     // но сам факт затухания проверяем: effective < MIN_CONFIDENCE.
-    const late = evaluate(candles, price, OPEN + 200_000)!;
+    const late = evaluate(candles, price, OPEN + 700_000)!;
     expect(late.effectiveConfidence).toBeLessThan(72);
     expect(late.phase).toBe("late");
   });
@@ -562,7 +562,7 @@ describe("evaluateSignal — факторы и структура readout", () =
     const candles = risingCandles(120);
     const target = candles.find((c) => c.openTime === OPEN);
     expect(target).toBeDefined();
-    const readout = evaluate(candles, BASE * 1.001, OPEN + 130_000)!;
+    const readout = evaluate(candles, BASE * 1.001, OPEN + 190_000)!;
     expect(readout.referencePrice).toBe(target!.open);
   });
 });
@@ -578,7 +578,7 @@ describe("evaluateSignal — referencePrice и прогресс раунда", (
 
   it("новый раунд (после CLOSE) начинается с новой referencePrice", () => {
     // Свечи заканчиваются задолго до OPEN — последний раунд до окна now.
-    const readout = evaluate(risingCandles(90), BASE, OPEN + 60_000)!;
+    const readout = evaluate(risingCandles(90), BASE, OPEN + 240_000)!;
     expect(readout.windowStart).toBe(OPEN);
     expect(readout.referencePrice).toBeGreaterThan(0);
   });

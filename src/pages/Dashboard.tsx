@@ -103,7 +103,7 @@ export default function Dashboard() {
               Favourite Edge
             </p>
             <p className="truncate text-[11px] leading-tight text-muted-foreground">
-              Реальный стакан Polymarket · 5-минутные раунды BTC и ETH
+              Реальный стакан Polymarket · 15-минутные раунды BTC и ETH
             </p>
           </div>
           <div className="ms-auto flex items-center gap-3">

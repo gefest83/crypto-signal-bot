@@ -32,8 +32,8 @@ export type Candle = {
   takerBuyQuote: number;
 };
 
-/** Binance 5-minute "Up or Down" rounds are aligned to UTC 5-minute marks. */
-export const ROUND_MS = 5 * 60 * 1000;
+/** Polymarket "Up or Down" rounds we trade are 15-minute, aligned to UTC quarter-hours. */
+export const ROUND_MS = 15 * 60 * 1000;
 
 export function roundWindow(now: number): { start: number; end: number } {
   const start = Math.floor(now / ROUND_MS) * ROUND_MS;

@@ -23,12 +23,23 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { evaluateSignal } from "../src/lib/strategy/engine";
+import { DEFAULT_CONFIG, evaluateSignal } from "../src/lib/strategy/engine";
 import type { Candle, MarketSymbol } from "../src/lib/market/types";
 
 const GAMMA = "https://gamma-api.polymarket.com";
 const CLOB = "https://clob.polymarket.com";
-const ROUND_S = 300;
+/**
+ * Market length in minutes. 5m and 15m are both listed, and the slug, the
+ * cache and the entry offsets all follow this one number.
+ *
+ * Usage: bun scripts/polymarket-5m.ts <interval> <days> <mode> [arg]
+ */
+const INTERVAL = Number(process.argv[2] ?? 5);
+const command = process.argv[4] ?? "analyse";
+const ROUND_S = INTERVAL * 300;
+/** Enter 20% into the round: the market has moved but has not settled. */
+const ENTRY_MS = Math.round(INTERVAL * 60 * 1000 * 0.2);
+const CONFIRM_MS = Math.round(INTERVAL * 60 * 1000 * 0.4);
 const CACHE_DIR = join(import.meta.dir, ".cache");
 const ASSETS = ["btc", "eth"] as const;
 type Asset = (typeof ASSETS)[number];
@@ -90,7 +101,7 @@ async function loadRound(asset: Asset, t0: number): Promise<Round> {
   let event: Record<string, unknown> | undefined;
   try {
     const events = (await getJson(
-      `${GAMMA}/events?slug=${asset}-updown-5m-${t0}`,
+      `${GAMMA}/events?slug=${asset}-updown-${INTERVAL}m-${t0}`,
     )) as Record<string, unknown>[];
     event = events[0];
   } catch {
@@ -130,7 +141,7 @@ async function loadRound(asset: Asset, t0: number): Promise<Round> {
   }
 }
 
-const CACHE_FILE = join(CACHE_DIR, "polymarket-5m-cache.json");
+const CACHE_FILE = join(CACHE_DIR, `polymarket-${INTERVAL}m-cache.json`);
 
 /**
  * Fetch any rounds in the window that are not cached yet and merge them into a
@@ -281,16 +292,24 @@ function runEngineJoin(rounds: Round[], binanceDays: number) {
     const candles = candlesOf.get(symbol);
     if (!lookup || !candles) continue;
     const i = lookup.get(round.t0 * 1000);
-    if (i === undefined || i < 30 || i + 4 >= candles.length) continue;
+    if (i === undefined || i < 30 || i + INTERVAL >= candles.length) continue;
 
-    const entry = priceAt(round, 60);
+    const entry = priceAt(round, ENTRY_MS / 1000);
     if (entry === null) continue;
 
+    // The candle engine only publishes inside its own window, so the window is
+    // moved to the same 20% mark the entry uses.
     const readout = evaluateSignal({
       symbol,
       candles: candles.slice(Math.max(0, i - 199), i + 1),
       price: candles[i].close,
-      now: round.t0 * 1000 + 60_000,
+      now: round.t0 * 1000 + ENTRY_MS,
+      config: {
+        ...DEFAULT_CONFIG,
+        minEntryElapsedMs: ENTRY_MS,
+        entryWindowMs: ENTRY_MS + 60_000,
+        entryCutoffMs: ENTRY_MS + 120_000,
+      },
     });
     if (!readout || readout.direction === "stand-aside") continue;
 
@@ -312,7 +331,7 @@ function runEngineJoin(rounds: Round[], binanceDays: number) {
     console.log("\nengine produced no call that lines up with the Polymarket rounds");
     return;
   }
-  console.log(`\n=== engine call at t+60s, real Polymarket prices ===`);
+  console.log(`\n=== ${INTERVAL}m: свечной движок на t+${ENTRY_MS / 1000}s против реальных цен ===`);
   console.log(`signals          ${signals}`);
   console.log(`hit rate         ${((wins / signals) * 100).toFixed(1)}%`);
   console.log(`avg real price   ${(costSum / signals).toFixed(3)}`);
@@ -371,7 +390,7 @@ function loadBinance(symbol: MarketSymbol, days: number): boolean {
 }
 
 async function main() {
-  const days = Number(process.argv[2] ?? 2);
+  const days = Number(process.argv[3] ?? 2);
   const rounds = await loadAll(days);
   console.log(`\n${rounds.length} resolved 5-minute rounds over ${days}d`);
 
@@ -385,13 +404,13 @@ async function main() {
     console.log(`   t+${String(s.t - first.t0).padStart(3)}s  up=${s.p}`);
   }
 
-  if (process.argv[3] === "engine") {
+  if (command === "engine") {
     runEngineJoin(rounds, 30);
     return;
   }
 
-  if (process.argv[3] === "favorite") {
-    const at = Number(process.argv[4] ?? 60);
+  if (command === "favorite") {
+    const at = Number(process.argv[5] ?? ENTRY_MS / 1000);
     const usable = rounds
       .map((round) => ({ round, p: priceAt(round, at) }))
       .filter((row): row is { round: Round; p: number } => row.p !== null);
@@ -461,7 +480,7 @@ async function main() {
     return;
   }
 
-  if (process.argv[3] === "revert") {
+  if (command === "revert") {
     // The finding that survived: when a favourite that was >= 0.80 falls back
     // and settles in the 0.65-0.85 band, it still wins far more often than it
     // costs. This walks the band properly (the earlier run mislabelled buckets)
@@ -483,8 +502,8 @@ async function main() {
     for (const round of rounds) {
       if (round.upWon === null) continue;
       const path = round.samples.map((s) => ({ dt: s.t - round.t0, p: s.p })).sort((a, b) => a.dt - b.dt);
-      const first = path.find((s) => s.dt >= 60);
-      const second = path.find((s) => s.dt >= 120);
+      const first = path.find((s) => s.dt >= ENTRY_MS / 1000);
+      const second = path.find((s) => s.dt >= CONFIRM_MS / 1000);
       if (!first || !second || second.dt <= first.dt) continue;
       const upFirst = first.p >= 0.5;
       const upSecond = second.p >= 0.5;
@@ -495,7 +514,7 @@ async function main() {
       rows.push({ side: sideSecond, won: upFirst === round.upWon, t0: round.t0, asset: round.asset });
     }
 
-    console.log(`\n=== вход на t+120 после падения фаворита с >=0.80 (${rows.length} раундов) ===`);
+    console.log(`\n=== ${INTERVAL}m: вход на t+${CONFIRM_MS / 1000} после падения фаворита с >=0.80 (${rows.length} раундов) ===`);
     console.log("полоса входа        n    попаданий   ср.цена   валовой   комиссия   счёт после спреда");
     for (const [lo, hi] of bands) {
       const picked = rows.filter((r) => r.side >= lo && r.side < hi);
@@ -549,7 +568,7 @@ async function main() {
     return;
   }
 
-  if (process.argv[3] === "confirm") {
+  if (command === "confirm") {
     // A genuinely new signal source: the contract's OWN price path.
     //
     // We know a limit bid on the favourite gets filled exactly when the market
@@ -574,8 +593,8 @@ async function main() {
     for (const round of rounds) {
       if (round.upWon === null) continue;
       const path = round.samples.map((s) => ({ dt: s.t - round.t0, p: s.p })).sort((a, b) => a.dt - b.dt);
-      const first = path.find((s) => s.dt >= 60);
-      const second = path.find((s) => s.dt >= 120);
+      const first = path.find((s) => s.dt >= ENTRY_MS / 1000);
+      const second = path.find((s) => s.dt >= CONFIRM_MS / 1000);
       if (!first || !second || second.dt <= first.dt) continue;
 
       // Favourite side and its price as a 0-1 number.
@@ -610,13 +629,13 @@ async function main() {
       }
     };
 
-    console.log(`\n=== фаворит на t+60, вход на t+120, подтверждение = динамика цены ===`);
-    show("цена фаворита между t+60 и t+120:", groups);
+    console.log(`\n=== ${INTERVAL}m: подтверждение = динамика цены ===`);
+    show("динамика между первой и второй отметкой:", groups);
     show("уровень входа на t+120:", byLevel);
     return;
   }
 
-  if (process.argv[3] === "fills") {
+  if (command === "fills") {
     // The decisive question for a maker strategy: would a limit order at the
     // bid actually have been hit before the round resolved?
     //
@@ -626,9 +645,9 @@ async function main() {
     //
     // CAVEAT: prices-history is ~1-minute granularity, so we only observe ~3
     // prints after entry. This UNDERSTATES the fill rate; treat it as a floor.
-    const ENTRY = 60;
+    const ENTRY = Math.round(INTERVAL * 12);
     const FAVOURITE = 0.8;
-    const at = Number(process.argv[4] ?? ENTRY);
+    const at = Number(process.argv[5] ?? ENTRY);
 
     type Fill = { filled: boolean; cost: number; won: boolean; p0: number };
     const signals: Fill[] = [];
@@ -664,7 +683,7 @@ async function main() {
     const rate = (rows: Fill[]) =>
       rows.length === 0 ? "—" : `${((rows.filter((s) => s.won).length / rows.length) * 100).toFixed(1)}%`;
 
-    console.log(`\n=== лимитная заявка на фаворита, вход t+${at}s ===`);
+    console.log(`\n=== ${INTERVAL}m: лимит на фаворита, вход t+${at}s ===`);
     console.log(`сигналов            ${total}`);
     console.log(`порог фаворита     ${FAVOURITE.toFixed(2)}`);
     console.log(`средняя цена входа ${(signals.reduce((a, s) => a + s.cost, 0) / total).toFixed(3)}`);
@@ -694,7 +713,7 @@ async function main() {
     return;
   }
 
-  if (process.argv[3] === "timing") {
+  if (command === "timing") {
     // Where along the round is the price cheapest relative to the outcome?
     // EV of buying UP at each available quote.
     for (const at of [0, 60, 120, 180, 240]) analyse(rounds, at);

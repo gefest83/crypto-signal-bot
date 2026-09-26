@@ -156,12 +156,12 @@ function EntryWindow({ windowStart, now }: { windowStart: number; now: number })
       </div>
       <p className="text-xs leading-relaxed text-muted-foreground">
         {waiting
-          ? `Идёт первая минута раунда. До ${Math.round(
+          ? `Идёт первый квартал раунда. До ${Math.round(
               ENTRY_START_MS / 1000,
-            )}-й секунды в стакане только тики — вход возможен только после её закрытия.`
+            )}-й секунды в стакане только тики — вход возможен только после закрытия.`
           : over
             ? "Вход закрыт: контракт уже отражает движение. Ждём следующий раунд."
-            : "Первая минута закрыта — смотрим реальный стакан и входим только в явного фаворита."}
+            : "Первый квартал закрыт — смотрим реальный стакан и входим только в явного фаворита."}
       </p>
     </div>
   );
@@ -334,7 +334,7 @@ export function SignalHero({
                 <ul className="flex flex-col gap-1.5 border-t border-border/60 pt-4">
                   <li className="flex gap-2 text-xs leading-relaxed text-muted-foreground">
                     <span className="mt-1.5 size-1 shrink-0 rounded-full bg-muted-foreground/50" />
-                    {round?.title ?? "Рынок 5 минут Up/Down"}
+                    {round?.title ?? "Рынок 15 минут Up/Down"}
                   </li>
                   <li className="flex gap-2 text-xs leading-relaxed text-muted-foreground">
                     <span className="mt-1.5 size-1 shrink-0 rounded-full bg-muted-foreground/50" />

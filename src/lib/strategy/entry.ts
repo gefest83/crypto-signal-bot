@@ -30,12 +30,12 @@ import type { Direction } from "./engine";
  * paying for the risk it takes on.
  */
 export const FAVORITE_MIN_ASK = 0.8;
-/** The round's first minute must have closed before we may look at the book. */
-export const ENTRY_START_MS = 60_000;
+/** The round's first quarter must have passed before we look at the book. */
+export const ENTRY_START_MS = 180_000;
 /** Past this point the contract is a lottery, whatever the direction says. */
-export const ENTRY_END_MS = 150_000;
+export const ENTRY_END_MS = 540_000;
 /** Longest answer Polymarket takes before the next round replaces the market. */
-export const ROUND_MS = 5 * 60_000;
+export const ROUND_MS = 15 * 60_000;
 
 /**
  * Polymarket taker fee rate for the crypto category.
@@ -149,7 +149,7 @@ export function evaluateEntry({
     return {
       ...base,
       direction: "stand-aside",
-      reason: `Ждём закрытия первой минуты — до ${ENTRY_START_MS / 1000}-й секунды в стакане только тики.`,
+      reason: `Ждём первые ${ENTRY_START_MS / 1000} секунд раунда — раньше в стакане только тики.`,
     };
   }
   if (elapsed >= ENTRY_END_MS) {

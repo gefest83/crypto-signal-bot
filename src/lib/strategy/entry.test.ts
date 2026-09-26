@@ -15,7 +15,7 @@ const at = (offsetMs: number) => START + offsetMs;
 /** A round where the market has made UP the clear favourite. */
 const upFavourite = {
   start: START,
-  now: at(90_000),
+  now: at(ENTRY_START_MS + 30_000),
   upAsk: 0.86,
   upBid: 0.85,
   downAsk: 0.15,
@@ -66,7 +66,7 @@ describe("порог фаворита", () => {
   it("видит фаворита по цене, а не по тику направления", () => {
     const readout = evaluateEntry({
       start: START,
-      now: at(90_000),
+      now: at(ENTRY_START_MS + 30_000),
       upAsk: 0.2,
       upBid: 0.19,
       downAsk: 0.83,
@@ -79,7 +79,7 @@ describe("порог фаворита", () => {
   it("молчит без котировок", () => {
     const readout = evaluateEntry({
       start: START,
-      now: at(90_000),
+      now: at(ENTRY_START_MS + 30_000),
       upAsk: null,
       upBid: null,
       downAsk: null,
@@ -134,7 +134,7 @@ describe("цена лимита в вызове", () => {
   it("отдаётся вместе с вызовом", () => {
     const readout = evaluateEntry({
       start: START,
-      now: at(90_000),
+      now: at(ENTRY_START_MS + 30_000),
       upAsk: 0.2,
       upBid: 0.19,
       downAsk: 0.83,

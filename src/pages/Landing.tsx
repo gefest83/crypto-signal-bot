@@ -60,7 +60,7 @@ const TIMELINE = [
   {
     time: "12:04:58",
     title: "Подготовка",
-    body: "Движок держит в памяти последние 200 минутных свечей и каждые 5 секунд перечитывает стакан Polymarket по текущему 5-минутному рынку.",
+    body: "Движок держит в памяти последние 200 минутных свечей и каждые 5 секунд перечитывает стакан Polymarket по текущему 15-минутному рынку.",
   },
   {
     time: "12:05:00",
@@ -151,7 +151,7 @@ function SignalPreview() {
           <p className="font-mono text-[3.25rem] leading-none font-semibold tracking-tight text-up">
             UP
           </p>
-          <p className="mt-1.5 text-sm font-medium">Прогноз роста на 5 минут</p>
+          <p className="mt-1.5 text-sm font-medium">Прогноз роста на 15 минут</p>
         </div>
       </div>
 
@@ -236,7 +236,7 @@ export default function Landing() {
               Favourite Edge
             </p>
             <p className="truncate text-[11px] leading-tight text-muted-foreground">
-              Реальный стакан Polymarket · 5 минут · BTC и ETH
+              Реальный стакан Polymarket · 15 минут · BTC и ETH
             </p>
           </div>
           <nav className="ms-6 hidden items-center gap-6 md:flex">
@@ -284,7 +284,7 @@ export default function Landing() {
           >
             <span className="inline-flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1 text-[11px] font-medium text-muted-foreground">
               <span className="size-1.5 animate-signal-pulse rounded-full bg-up" />
-              Polymarket · 5-минутные раунды Up/Down
+              Polymarket · 15-минутные раунды Up/Down
             </span>
             <h1 className="mt-5 text-[2.5rem] leading-[1.05] font-semibold tracking-tight text-balance sm:text-5xl lg:text-[3.4rem]">
               Не угадываем направление — покупаем фаворита, когда рынок его недоплачивает
@@ -498,7 +498,7 @@ export default function Landing() {
           <SectionHeading
             eyebrow="Риск и дисциплина"
             title="Правила, которые защищают от главной ошибки"
-            body="Главная ошибка на 5-минутных рынках — войти поздно, потому что «уже точно видно». Эти правила запрещают такие сделки заранее."
+            body="Главная ошибка на 15-минутных рынках — войти поздно, потому что «уже точно видно». Эти правила запрещают такие сделки заранее."
           />
           <div className="mt-10 grid gap-3 sm:grid-cols-2">
             {DISCIPLINE.map((item, index) => (
@@ -565,7 +565,7 @@ export default function Landing() {
           <div className="flex items-center gap-3">
             <BrandMark className="size-7" />
             <span className="text-xs text-muted-foreground">
-              Favourite Edge — сигнальная стратегия для 5-минутных рынков Polymarket
+              Favourite Edge — сигнальная стратегия для 15-минутных рынков Polymarket
             </span>
           </div>
           <p className="max-w-md text-[11px] leading-relaxed text-muted-foreground">

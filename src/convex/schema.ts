@@ -53,7 +53,7 @@ const schema = defineSchema(
       symbol: v.string(),
       windowStart: v.number(),
       windowEnd: v.number(),
-      /** Polymarket market this call was priced against, e.g. btc-updown-5m-… */
+      /** Polymarket market this call was priced against, e.g. btc-updown-15m-… */
       marketSlug: v.optional(v.string()),
       /** CLOB token id of the side that was bought. */
       tokenId: v.optional(v.string()),

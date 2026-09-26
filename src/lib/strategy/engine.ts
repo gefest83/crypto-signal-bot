@@ -27,15 +27,15 @@ import { ROUND_MS, roundWindow } from "@/lib/market/types";
  * exactly that: entries taken inside the first minute graded at ~64%, against
  * ~73% once the opening minute had actually printed.
  */
-export const MIN_ENTRY_ELAPSED_MS = 60_000;
+export const MIN_ENTRY_ELAPSED_MS = 180_000;
 /**
  * Confirmation window: the first minute is closed, the contract has barely
  * repriced. This is now the whole entry window — the decision is made with the
  * round's opening minute in hand, 20% into the round.
  */
-export const ENTRY_WINDOW_MS = 120_000;
+export const ENTRY_WINDOW_MS = 480_000;
 /** After this point a new entry has no edge left — the price already moved. */
-export const ENTRY_CUTOFF_MS = 180_000;
+export const ENTRY_CUTOFF_MS = 540_000;
 
 /**
  * Minimum absolute score required to publish a directional call.
