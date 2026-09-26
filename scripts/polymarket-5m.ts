@@ -461,6 +461,134 @@ async function main() {
     return;
   }
 
+  if (process.argv[3] === "revert") {
+    // The finding that survived: when a favourite that was >= 0.80 falls back
+    // and settles in the 0.65-0.85 band, it still wins far more often than it
+    // costs. This walks the band properly (the earlier run mislabelled buckets)
+    // and charges the real taker fee plus half the spread on top.
+    const FEE = 0.07;
+    const fee = (p: number) => FEE * (1 - p);
+    const bands: [number, number][] = [
+      [0.5, 0.65],
+      [0.65, 0.7],
+      [0.7, 0.75],
+      [0.75, 0.8],
+      [0.8, 0.85],
+      [0.85, 0.9],
+      [0.9, 0.95],
+      [0.95, 1.01],
+    ];
+    const rows: { side: number; won: boolean }[] = [];
+
+    for (const round of rounds) {
+      if (round.upWon === null) continue;
+      const path = round.samples.map((s) => ({ dt: s.t - round.t0, p: s.p })).sort((a, b) => a.dt - b.dt);
+      const first = path.find((s) => s.dt >= 60);
+      const second = path.find((s) => s.dt >= 120);
+      if (!first || !second || second.dt <= first.dt) continue;
+      const upFirst = first.p >= 0.5;
+      const upSecond = second.p >= 0.5;
+      if (upFirst !== upSecond) continue; // the favourite must not have flipped
+      const sideFirst = upFirst ? first.p : 1 - first.p;
+      if (sideFirst < 0.8) continue; // only ever a confirmed favourite first
+      const sideSecond = upSecond ? second.p : 1 - second.p;
+      rows.push({ side: sideSecond, won: upFirst === round.upWon });
+    }
+
+    console.log(`\n=== вход на t+120 после падения фаворита с >=0.80 (${rows.length} раундов) ===`);
+    console.log("полоса входа        n    попаданий   ср.цена   валовой   комиссия   счёт после спреда");
+    for (const [lo, hi] of bands) {
+      const picked = rows.filter((r) => r.side >= lo && r.side < hi);
+      if (picked.length < 25) continue;
+      const n = picked.length;
+      const hits = picked.filter((r) => r.won).length;
+      const avg = picked.reduce((a, r) => a + r.side, 0) / n;
+      const gross = hits / n - avg;
+      const f = fee(avg);
+      // Buying at the ask costs half a one-cent spread on top of the fee.
+      const net = hits / n - (avg + 0.005) - f;
+      console.log(
+        [
+          `${lo.toFixed(2)}-${hi.toFixed(2)}`.padEnd(16),
+          String(n).padStart(4),
+          `${((hits / n) * 100).toFixed(1)}%`.padStart(12),
+          avg.toFixed(3).padStart(9),
+          `${gross >= 0 ? "+" : ""}${gross.toFixed(4)}`.padStart(10),
+          `${(f * 100).toFixed(2)}%`.padStart(10),
+          `${net >= 0 ? "+" : ""}${net.toFixed(4)}`.padStart(12),
+        ].join("  "),
+      );
+    }
+    return;
+  }
+
+  if (process.argv[3] === "confirm") {
+    // A genuinely new signal source: the contract's OWN price path.
+    //
+    // We know a limit bid on the favourite gets filled exactly when the market
+    // is turning against us. So ask the opposite question: when the favourite
+    // has *strengthened* between two samples, is it more certain than the
+    // unconditional favourite rate? If yes, that is a real confirmation signal
+    // and the second sample is a better entry than the first.
+    const groups: Record<string, { n: number; wins: number; sumPrice: number; ev: number }> = {
+      "rose": { n: 0, wins: 0, sumPrice: 0, ev: 0 },
+      "flat": { n: 0, wins: 0, sumPrice: 0, ev: 0 },
+      "fell": { n: 0, wins: 0, sumPrice: 0, ev: 0 },
+    };
+    const byLevel: Record<string, { n: number; wins: number; sumPrice: number; ev: number }> = {};
+    const bump = (table: Record<string, { n: number; wins: number; sumPrice: number; ev: number }>, key: string, won: boolean, price: number) => {
+      const g = (table[key] ??= { n: 0, wins: 0, sumPrice: 0, ev: 0 });
+      g.n += 1;
+      g.wins += won ? 1 : 0;
+      g.sumPrice += price;
+      g.ev += (won ? 1 : 0) - price;
+    };
+
+    for (const round of rounds) {
+      if (round.upWon === null) continue;
+      const path = round.samples.map((s) => ({ dt: s.t - round.t0, p: s.p })).sort((a, b) => a.dt - b.dt);
+      const first = path.find((s) => s.dt >= 60);
+      const second = path.find((s) => s.dt >= 120);
+      if (!first || !second || second.dt <= first.dt) continue;
+
+      // Favourite side and its price as a 0-1 number.
+      const upFirst = first.p >= 0.5;
+      const sideFirst = upFirst ? first.p : 1 - first.p;
+      const upSecond = second.p >= 0.5;
+      const sideSecond = upSecond ? second.p : 1 - second.p;
+      if (sideFirst < 0.8 || upFirst !== upSecond) continue; // must be a clear, stable favourite
+
+      const delta = sideSecond - sideFirst;
+      const key = delta > 0.005 ? "rose" : delta < -0.005 ? "fell" : "flat";
+      const won = upFirst === round.upWon;
+      bump(groups, key, won, sideSecond);
+      const level = sideSecond >= 0.9 ? "0.90+" : sideSecond >= 0.85 ? "0.85-0.90" : "0.80-0.85";
+      bump(byLevel, level, won, sideSecond);
+    }
+
+    const show = (title: string, table: Record<string, { n: number; wins: number; sumPrice: number; ev: number }>) => {
+      console.log(`\n${title}`);
+      console.log("группа            n    попаданий   ср. цена   EV/сделку");
+      for (const [key, g] of Object.entries(table)) {
+        if (g.n === 0) continue;
+        console.log(
+          [
+            key.padEnd(16),
+            String(g.n).padStart(4),
+            `${((g.wins / g.n) * 100).toFixed(1)}%`.padStart(12),
+            (g.sumPrice / g.n).toFixed(3).padStart(10),
+            (g.ev / g.n >= 0 ? "+" : "") + (g.ev / g.n).toFixed(4),
+          ].join("  "),
+        );
+      }
+    };
+
+    console.log(`\n=== фаворит на t+60, вход на t+120, подтверждение = динамика цены ===`);
+    show("цена фаворита между t+60 и t+120:", groups);
+    show("уровень входа на t+120:", byLevel);
+    return;
+  }
+
   if (process.argv[3] === "fills") {
     // The decisive question for a maker strategy: would a limit order at the
     // bid actually have been hit before the round resolved?
