@@ -94,6 +94,14 @@ export type MarketStats = {
   key: string;
   label: string;
   interval: PmInterval;
+  /**
+   * Rounds this market has actually been through, and how many of them the
+   * order was RESTING in the book for. A market showing 400 rounds and 0
+   * quotes is broken; 400 and 380 means the console is alive and the fills
+   * simply are not coming. Without this pair, "no trades" is unreadable.
+   */
+  rounds: number;
+  quoted: number;
   /** Rounds where the limit was actually reached. */
   fills: number;
   /** How many closed at breakeven, how many were held to settlement. */
@@ -112,6 +120,8 @@ const zeroStats = (key: string, label: string, interval: PmInterval): MarketStat
   key,
   label,
   interval,
+  rounds: 0,
+  quoted: 0,
   fills: 0,
   exits: 0,
   held: 0,
@@ -126,6 +136,8 @@ const zeroStats = (key: string, label: string, interval: PmInterval): MarketStat
 export type PaperTotals = {
   /** Sum of every market. This is the headline number. */
   realised: number;
+  rounds: number;
+  quoted: number;
   fills: number;
   exits: number;
   held: number;
@@ -393,6 +405,14 @@ export function usePaperSession(
     [logSignal, positions, now, settings.penetrationTicks],
   );
 
+  /**
+   * Liveness counters. Without these, a console that is working correctly and
+   * a console that has silently stopped polling look identical from the
+   * outside: both show zero trades. Counting the rounds that went by, and the
+   * share of them where the order was genuinely resting, tells the two apart.
+   */
+  const [liveness, setLiveness] = useState<Record<string, { rounds: number; quoted: number }>>({});
+
   const graded = useRef<Record<string, number>>({});
   useEffect(() => {
     for (const market of MARKETS) {
@@ -403,6 +423,13 @@ export function usePaperSession(
       graded.current[market.key] = start;
       const session = sessions[market.key];
       if (!session || session.roundStart !== start) continue;
+      setLiveness((l) => ({
+        ...l,
+        [market.key]: {
+          rounds: (l[market.key]?.rounds ?? 0) + 1,
+          quoted: (l[market.key]?.quoted ?? 0) + (session.side ? 1 : 0),
+        },
+      }));
       if (session.state === "closed" || session.state === "held") continue;
       void closeRound(market, session, rounds[market.key]);
     }
@@ -420,6 +447,8 @@ export function usePaperSession(
         `${market.asset.toUpperCase()} ${market.interval}m`,
         market.interval,
       );
+      base.rounds = liveness[market.key]?.rounds ?? 0;
+      base.quoted = liveness[market.key]?.quoted ?? 0;
       base.missed = rows.filter((r) => !r.exited && r.pnl === 0).length;
       base.exits = rows.filter((r) => r.exited).length;
       base.held = filled.length - base.exits;
@@ -437,6 +466,8 @@ export function usePaperSession(
       perMarket: stats,
       totals: {
         realised: stats.reduce((sum, s) => sum + s.realised, 0),
+        rounds: stats.reduce((sum, s) => sum + s.rounds, 0),
+        quoted: stats.reduce((sum, s) => sum + s.quoted, 0),
         fills: stats.reduce((sum, s) => sum + s.fills, 0),
         exits: stats.reduce((sum, s) => sum + s.exits, 0),
         held: stats.reduce((sum, s) => sum + s.held, 0),
@@ -446,7 +477,7 @@ export function usePaperSession(
         worst: all.length ? Math.min(...all.map((r) => r.pnl)) : null,
       },
     };
-  }, [closed]);
+  }, [closed, liveness]);
 
   return {
     sessions: sessions as Partial<Record<MarketKey, PaperSession>>,

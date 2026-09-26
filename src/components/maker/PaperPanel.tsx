@@ -105,6 +105,12 @@ export function PaperPanel({
 
                 <dl className="mt-2 flex flex-wrap gap-x-3 gap-y-0.5 font-mono text-[10px] text-muted-foreground">
                   <div className="flex gap-1">
+                    <dt>раундов / висела</dt>
+                    <dd className="text-foreground">
+                      {stats.rounds} / {stats.quoted}
+                    </dd>
+                  </div>
+                  <div className="flex gap-1">
                     <dt>набито</dt>
                     <dd className="text-foreground">{stats.fills}</dd>
                   </div>
@@ -180,6 +186,7 @@ export function PaperPanel({
             </span>
           </div>
           <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 font-mono text-[11px] text-muted-foreground sm:grid-cols-4">
+            <Row label="Раундов / висела" value={`${totals.rounds} / ${totals.quoted}`} />
             <Row label="Сделок" value={String(totals.fills)} />
             <Row label="Выходов" value={String(totals.exits)} />
             <Row label="Плюс / минус" value={`${totals.wins} / ${totals.losses}`} />
@@ -215,8 +222,19 @@ export function PaperPanel({
         {perMarket.every((s) => s.fills === 0) && (
           <p className="flex items-center justify-center gap-2 py-3 text-xs text-muted-foreground">
             <Loader2 className="size-3.5 animate-spin" />
-            Заявки висят в стакане на {penetrationTicks}-тиковом проникновении. Набитие будет
-            засчитано, только когда цена пройдёт уровень, а не коснётся его. Обновлено {new Date(now).toLocaleTimeString("ru-RU")}.
+            {totals.rounds > 0 ? (
+              <>
+                Пройдено {totals.rounds} раундов, заявка висела в стакане {totals.quoted} из них.
+                Набития пока нет — оно засчитывается только когда цена пройдёт уровень на{" "}
+                {penetrationTicks} тик, а не коснётся его.
+              </>
+            ) : (
+              <>
+                Первый раунд ещё не закрыт. Заявки висят в стакане на {penetrationTicks}-тиковом
+                проникновении.
+              </>
+            )}{" "}
+            Обновлено {new Date(now).toLocaleTimeString("ru-RU")}.
           </p>
         )}
       </CardContent>
