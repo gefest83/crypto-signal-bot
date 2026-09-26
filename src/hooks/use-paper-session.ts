@@ -37,8 +37,8 @@ const SYMBOL_OF_ASSET: Record<PmAsset, string> = { btc: "BTCUSDT", eth: "ETHUSDT
  * Both intervals are live and both were measured, and they fail in opposite
  * ways, which is exactly why they are kept apart:
  *
- *   5m   288 rounds/day/asset, exit fires 80%, survivors win 47%
- *   15m   96 rounds/day/asset, exit fires 91%, survivors win 76%
+ *   5m   288 rounds/day/asset, exit fires 81%, survivors win 73%, 2 bad days
+ *   15m   96 rounds/day/asset, exit fires 91%, survivors win 76%, 8 bad days
  *
  * Averaging them would produce a number that describes neither. A separate
  * figure per market is the only honest way to see which one is actually

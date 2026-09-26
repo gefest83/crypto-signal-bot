@@ -61,11 +61,47 @@ describe("профили двух рынков не взаимозаменяем
     expect(five.evPerShare).toBeGreaterThan(fifteen.evPerShare);
   });
 
-  it("5m держится на выходе, потому что удержавшиеся выигрывают как монетка", () => {
-    // 47% — это не навык. Если бы на 5m удержавшиеся выигрывали 76%, как на
-    // 15m, весь риск был бы не в цене выхода, а где-то ещё.
-    expect(MARKET_PROFILES[5].survivorWinRate).toBeLessThan(0.5);
+  it("профили не сходятся с P&L — в этом баге профиля 5m", () => {
+    // Профиль — это набор частот, а перевес — следствие из них. Если числа не
+    // дают заявленный EV, значит одно из двух подставлено из другого
+    // интервала. Именно так в профиль 5m попали 80%/47% от рынка 15m.
+    for (const interval of [5, 15] as const) {
+      const p = MARKET_PROFILES[interval];
+      const limit = PM_LIMITS[interval];
+      const fee = TRADE_FEE_RATE * limit;
+      // Per-share payoffs. A winner pays 1, an exit costs the slippage, and the
+      // 2% commission is charged on the stake either way.
+      const won = 1 - limit - fee;
+      const lost = -limit - fee;
+      const exited = -EXIT_SLIPPAGE - fee;
+      const derived =
+        p.exitRate * exited +
+        (1 - p.exitRate) * (p.survivorWinRate * won + (1 - p.survivorWinRate) * lost);
+      expect(Math.abs(derived - p.evPerShare)).toBeLessThan(0.01);
+    }
+  });
+
+  it("5m не монетка: удержавшиеся выигрывают заметно чаще половины", () => {
+    // Раньше здесь стояло 47% — цифра от 15m. На своём лимите 0.50 у 5m
+    // удержавшиеся выигрывают 73%, и проигрышных дней 2 из 31, а не 9.
+    expect(MARKET_PROFILES[5].survivorWinRate).toBeGreaterThan(0.6);
     expect(MARKET_PROFILES[15].survivorWinRate).toBeGreaterThan(0.7);
+    expect(MARKET_PROFILES[5].entryOnly).toBeCloseTo(-0.192, 10);
+  });
+
+  it("5m выигрывает чаще: у него и перевес больше, и плохих дней меньше", () => {
+    expect(MARKET_PROFILES[5].evPerShare).toBeGreaterThan(MARKET_PROFILES[15].evPerShare);
+    expect(MARKET_PROFILES[5].losingDays).toBe("2 из 31");
+  });
+
+  it("выход по лимиту стоит 6-8% стейка, а не ноль", () => {
+    // Название «выход в ноль» в интерфейсе было ложью: 2ц × шар + 2% от
+    // стейка дают −30..−39 центов на $5, и так закрываются ~80% сделок.
+    for (const interval of [5, 15] as const) {
+      const exit = stakePnl(5, PM_LIMITS[interval], false, true);
+      expect(exit).toBeLessThan(0);
+      expect(exit / 5).toBeLessThan(-0.05);
+    }
   });
 
   it("на обоих рынках вход без выхода отрицателен", () => {

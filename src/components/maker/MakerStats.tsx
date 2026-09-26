@@ -1,5 +1,6 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
+  EXIT_SLIPPAGE,
   MARKET_PROFILES,
   PM_LIMITS,
   TRADE_FEE_RATE,
@@ -20,13 +21,17 @@ const usd = (v: number) => `${v < 0 ? "−" : "+"}$${Math.abs(v).toFixed(2)}`;
  *   5m   EV +0.018/шара   288 rounds/day/asset   3 trades a minute
  *   15m  EV +0.013/шара    96 rounds/day/asset   one trade every 15 min
  *
- * But the WAY they fail is opposite. On 5m the exit fires 80% of the time
- * and the survivors that must be held win 47% — a coin flip — so essentially
- * all of the edge is the exit, and 5m survives a 4c exit on sheer frequency
- * (288 rounds a day per asset). On 15m the exit fires 91% and the survivors
- * win 76%, so each trade is genuinely better — but the edge sits in reversion
- * happening OFTEN, which means an expensive exit kills it sooner: flat at 3c.
- * A blended average of the two would describe a market that does not exist.
+ * But the WAY they earn is different. On 5m the exit fires 81% of the time
+ * and the survivors that must be held win 73% — so the strategy there is not
+ * living on the exit alone, and 2 losing days in 31 says so. On 15m the exit
+ * fires 91% and survivors win 76%, but the market moves three times slower, so
+ * it collects a third as much per day and bleeds on 8 days out of 31.
+ *
+ * Every figure here is measured AT ITS OWN LIMIT. That is not a detail: an
+ * earlier version of this file reported the 15m exit rate for the 5m market,
+ * which made 5m look like a coin flip (47% survivors) when it is 73%, and
+ * that error survived review because the number looked like a plausible
+ * survey result. `scripts/maker-breakeven.ts` now takes the limit to decompose.
  */
 export function MakerStats({ stake }: { stake: number }) {
   const profiles = [MARKET_PROFILES[5], MARKET_PROFILES[15]];
@@ -52,16 +57,17 @@ export function MakerStats({ stake }: { stake: number }) {
 
         <div className="rounded-lg border border-border/60 bg-card/40 px-3 py-2.5 text-[11px] leading-relaxed text-muted-foreground">
           <span className="font-medium text-foreground">Почему не усреднять.</span> На 5m
-          удержавшиеся сделки выигрывают 47% — это монетка, и весь перевес держится на выходе:{" "}
-          {((MARKET_PROFILES[5].exitRate * 100) | 0)}% возвратов к лимиту. На 15m — 76% побед у
-          удержавшихся и {((MARKET_PROFILES[15].exitRate * 100) | 0)}% возвратов, то есть сделка
-          заметно качественнее. Но 15m тоньше на шару и{" "}
+          возврат к лимиту срабатывает в {((MARKET_PROFILES[5].exitRate * 100) | 0)}% случаев, у
+          удержавшихся {((MARKET_PROFILES[5].survivorWinRate * 100) | 0)}% побед, проигрышных дней{" "}
+          {MARKET_PROFILES[5].losingDays}. На 15m — {((MARKET_PROFILES[15].exitRate * 100) | 0)}%
+          возвратов, {((MARKET_PROFILES[15].survivorWinRate * 100) | 0)}% побед у удержавшихся,
+          проигрышных дней {MARKET_PROFILES[15].losingDays}. 5m выигрывает на частоте раундов и
+          проигрывает реже в 4 раза, но его перевес тоньше на шару и{" "}
           <span className="font-medium text-foreground">
             обнуляется раньше — на {((MARKET_PROFILES[15].breakEvenSlippage * 100) | 0)}ц против{" "}
             {((MARKET_PROFILES[5].breakEvenSlippage * 100) | 0)}ц у 5m
           </span>
-          : его перевес сидит в частоте возвратов, а не в их цене. Среднее этих двух не описывает ни
-          один реальный рынок.
+          . Среднее этих двух не описывает ни один реальный рынок.
         </div>
       </CardContent>
     </Card>
@@ -71,13 +77,19 @@ export function MakerStats({ stake }: { stake: number }) {
 function ProfileCard({ profile, stake }: { profile: MarketProfile; stake: number }) {
   const limit = PM_LIMITS[profile.interval];
   const perStake = profile.grossPerShare * (stake / limit) - stake * TRADE_FEE_RATE;
+  const shares = stake / limit;
   const outcomes = [
     { label: "держали, выиграли", value: stake * (1 - limit) - stake * TRADE_FEE_RATE, good: true },
     { label: "держали, проиграли", value: -stake * (1 + TRADE_FEE_RATE), good: false },
     {
-      label: "вышли в ноль",
-      value: -(stake / limit) * 0.02 - stake * TRADE_FEE_RATE,
+      // "В ноль" — это не ноль. Выход стоит 2 цента на КАЖДУЮ из шар, плюс
+      // 2% комиссии, и на $5 это 30–39 центов. Называть это «безубытком»
+      // было бы самым дорогим словом в интерфейсе: 80% сделок закрываются
+      // именно так, и именно этот расход держит на себе весь перевес.
+      label: "вышли по лимиту",
+      value: -shares * EXIT_SLIPPAGE - stake * TRADE_FEE_RATE,
       good: null,
+      note: `${(shares * EXIT_SLIPPAGE * 100).toFixed(0)}ц спред + ${(stake * TRADE_FEE_RATE * 100).toFixed(0)}ц комиссия`,
     },
   ];
 
@@ -109,15 +121,20 @@ function ProfileCard({ profile, stake }: { profile: MarketProfile; stake: number
 
       <div className="mt-2.5 border-t border-border/60 pt-2">
         <p className="text-[10px] text-muted-foreground">
-          Сделка на ${stake}, {outcomes.length} исхода:
+          Сделка на ${stake} = {shares.toFixed(2)} шар, три исхода:
         </p>
         <ul className="mt-1 flex flex-col gap-0.5">
           {outcomes.map((outcome) => (
             <li key={outcome.label} className="flex items-baseline justify-between gap-2 text-[10px]">
-              <span className="text-muted-foreground">{outcome.label}</span>
+              <span className="text-muted-foreground">
+                {outcome.label}
+                {"note" in outcome && outcome.note ? (
+                  <span className="ms-1 opacity-70">({outcome.note})</span>
+                ) : null}
+              </span>
               <span
                 className={cn(
-                  "font-mono",
+                  "font-mono shrink-0",
                   outcome.good === true
                     ? "text-emerald-500"
                     : outcome.good === false

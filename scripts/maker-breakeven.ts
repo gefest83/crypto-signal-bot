@@ -187,16 +187,21 @@ console.log("   and remember: fills are assumed at the printed mid, not at our b
 // ---------------------------------------------------------------------------
 // 4. Decomposition: how much is the entry worth, and how much is the exit?
 // ---------------------------------------------------------------------------
-console.log("\n=== DECOMPOSITION at limit 0.35 — what actually makes the money ===");
+// The decomposition and the day-by-day stability check have to run at the
+// limit this interval ACTUALLY trades. Hardcoding 0.35 meant the 5m profile
+// was reporting another limit's exit rate and survivor win rate — numbers that
+// looked entirely plausible on a dashboard and were measured nowhere.
+const DECOMP_LIMIT = Number(process.argv[6] ?? 0.35);
+console.log(`\n=== DECOMPOSITION at limit ${DECOMP_LIMIT} — what actually makes the money ===`);
 for (const up of [true, false]) {
   const trades: Trade[] = [];
   for (const round of cache) {
-    const got = simulate(round, 0.35, up);
+    const got = simulate(round, DECOMP_LIMIT, up);
     if (got) trades.push(got);
   }
   const wins = trades.filter((t) => t.won).length;
   // What the same fills would be worth with no exit at all.
-  const holdOnly = mean(trades.map((t) => (t.won ? 1 - 0.35 : -0.35)));
+  const holdOnly = mean(trades.map((t) => (t.won ? 1 - DECOMP_LIMIT : -DECOMP_LIMIT)));
   const withExit = mean(trades.map((t) => t.pnl));
   const exited = trades.filter((t) => t.exited);
   const held = trades.filter((t) => !t.exited);
@@ -215,11 +220,11 @@ for (const up of [true, false]) {
   );
 }
 
-console.log("\n=== STABILITY: fixed rule 0.35, P&L per day ===");
+console.log(`\n=== STABILITY: fixed rule ${DECOMP_LIMIT}, P&L per day ===`);
 for (const up of [true, false]) {
   const perDay = new Map<number, number>();
   for (const round of cache) {
-    const got = simulate(round, 0.35, up);
+    const got = simulate(round, DECOMP_LIMIT, up);
     if (!got) continue;
     const day = Math.floor(round.t0 / 86400);
     perDay.set(day, (perDay.get(day) ?? 0) + got.pnl);

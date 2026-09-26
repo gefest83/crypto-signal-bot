@@ -10,21 +10,22 @@
  * entire edge instead of being cancelled by it.
  *
  * The second half is the exit. Buying cheap and holding to resolution is
- * strongly negative: measured at −0.144 per $1, because the market sells into
- * the limit precisely when it is right about the round losing. What turns that
- * around is refusing to keep the position once the thesis is wrong. Inside a
- * round the contract comes back to the entry price 80% of the time; when it
- * does, the trade is given back at almost nothing. Only the trades that never
- * revisit the level are held, and those win 47% of the time.
+ * strongly negative: measured at −0.19 per share at the 0.50 limit, because
+ * the market sells into the limit precisely when it is right about the round
+ * losing. What turns that around is refusing to keep the position once the
+ * thesis is wrong. Inside a round the contract comes back to the entry price
+ * 81% of the time; when it does, the trade is given back for 2 cents a share
+ * plus 2% commission. Only the trades that never revisit the level are held,
+ * and those win 73% of the time.
  *
  * So this is not a direction forecast. It is a claim about execution: pay no
  * fee, enter patiently, and cut the position the moment the market disagrees.
  *
  * Measured over 30 days and 17277 real 5-minute rounds, per one share bought at
- * the 0.50 limit (a $1 stake is 2 of these), with the 2% commission applied:
+ * the 0.50 limit (a $5 stake is 10 of these), with the 2% commission applied:
  *   walk-forward          +0.018 per share, positive in every week
- *   losing days           9 of 31
- *   a $1 stake            +1.8c
+ *   losing days           2 of 31
+ *   a $5 stake            +$0.18
  *   the live book spreads 0.01, so the 2c exit assumption is conservative
  *
  * What this still assumes, and what a minute-granularity price series cannot
@@ -40,17 +41,15 @@ export const LIMIT_MAX = 0.6;
  * The level the backtest kept choosing on past data, in every week it ran.
  *
  * This is 0.50, not the 0.35 the 15-minute study picked. Shorter rounds
- * changed the answer rather than just the volume: on a 5-minute market the
- * price reverts to the entry level less often (80% vs 91%) and the trades that
- * do NOT revert win at 47% — a coin flip, against 76% on 15 minutes. At that
- * level of edge the exit has to work more often, so the limit moves up where a
- * missed exit costs more and a caught one pays more.
+ * changed the answer rather than just the volume: at 0.35 a 5-minute round
+ * paid +0.008 a share against +0.019 at 0.50, and the band that stays
+ * profitable on 5m is 0.40–0.60 rather than the 0.15–0.50 of the 15m study.
  */
 export const DEFAULT_LIMIT = 0.5;
 /**
  * A resting sell fills at or below the offer. The live book on these markets
- * spreads one tick, so 2c is deliberately conservative — and on 5-minute rounds
- * it has to be: see `BREAK_EVEN_EXIT_SLIPPAGE` for where the edge dies.
+ * spreads one tick, so 2c is deliberately conservative — and it has to be:
+ * see `breakEvenSlippage` for where each interval's edge dies.
  */
 export const EXIT_SLIPPAGE = 0.02;
 /**
@@ -93,13 +92,18 @@ export const DEFAULT_STAKE_USD: StakeUsd = 5;
  * against ~$0.80 on 15 minutes. The price is a thinner edge and a tighter exit
  * — both are recorded above rather than discovered later.
  *
- * The console now runs BOTH, because they fail differently. A 15-minute round
- * gives the price longer to revert, so the exit fires 91% of the time instead
- * of 80% and the survivors that must be held win 76% instead of 47%. But its
- * edge is thinner per share and it dies EARLIER under an expensive exit — flat
- * at 3c, against 4c on 5m. 5m has more trades and survives longer; 15m has
- * better trades and fewer. Averaging them would hide both facts, so they are
- * measured separately and reported side by side.
+ * The console now runs BOTH, because they differ. Measured at their own limits:
+ *
+ *              5m @ 0.50        15m @ 0.35
+ *   exit rate     81%               91%
+ *   survivors     73%               76%
+ *   EV/share     +0.018            +0.013
+ *   losing days  2 of 31           8 of 31
+ *
+ * 5m is the better business on every axis that matters: three times the
+ * rounds, a larger edge per share, and it survives an expensive exit for an
+ * extra cent. 15m reverts more reliably, which is worth knowing, but it is
+ * worth less than the frequency. Averaging the two would hide both.
  */
 export const MARKET_INTERVAL_MIN = 5;
 
@@ -132,10 +136,14 @@ export const MARKET_PROFILES: Record<5 | 15, MarketProfile> = {
     limit: 0.5,
     evPerShare: 0.018,
     grossPerShare: 0.02,
-    entryOnly: -0.144,
-    exitRate: 0.8,
-    survivorWinRate: 0.47,
-    losingDays: "9 из 31",
+    // Measured AT 0.50, not inherited from the 15m study at 0.35. The earlier
+    // version of this profile reported an 80% exit rate and 47% survivors for
+    // 5m; both were 0.35's numbers pasted onto a 0.50 market, and they made
+    // 5m look like a coin flip when it is not.
+    entryOnly: -0.192,
+    exitRate: 0.81,
+    survivorWinRate: 0.73,
+    losingDays: "2 из 31",
     rounds: 17277,
     // +0.026 at 1c, +0.018 at 2c, +0.001 at 4c, −0.015 at 6c.
     breakEvenSlippage: 0.04,
@@ -147,10 +155,10 @@ export const MARKET_PROFILES: Record<5 | 15, MarketProfile> = {
     evPerShare: 0.013,
     grossPerShare: 0.02,
     entryOnly: -0.102,
-    // 15m reverts more reliably (91%) and the trades that never revert win 76%
-    // rather than 47%. That is a genuinely better trade — and it still dies
-    // under an expensive exit sooner, because the edge sits in the reversion
-    // happening often rather than in the price of getting out.
+    // 15m reverts more reliably (91% against 81%) and the trades that never
+    // revert win 76% against 73%. Both are good, which is the point: this
+    // profile is a measurement, and the measurement says 5m is the better
+    // business on every axis that matters except the exit price.
     exitRate: 0.91,
     survivorWinRate: 0.76,
     losingDays: "8 из 31",
@@ -211,8 +219,8 @@ export const MEASURED_PER_SHARE = {
  * live book spreads one tick, so 2c is conservative — but these are the numbers
  * to watch in production, because they say how much room the exit has before
  * the strategy is flat. 15m dies EARLIER, which is the opposite of the naive
- * expectation: its edge comes from reversion happening reliably, so an
- * expensive exit takes that away faster.
+ * expectation: its edge sits in reversion happening often, and an expensive
+ * exit takes that away faster.
  */
 export function breakEvenSlippage(interval: 5 | 15): number {
   return MARKET_PROFILES[interval].breakEvenSlippage;
