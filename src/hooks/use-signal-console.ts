@@ -4,7 +4,7 @@ import type { FeedStatus } from "@/lib/market/binance";
 import { MARKET_SYMBOLS, type MarketSymbol } from "@/lib/market/types";
 import { evaluateSignal, type SignalReadout } from "@/lib/strategy/engine";
 import { ENTRY_END_MS, evaluateEntry, type EntryReadout } from "@/lib/strategy/entry";
-import { useMutation, useQuery } from "convex/react";
+import { useAction, useMutation } from "convex/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMarketFeed } from "./use-market-feed";
 import { useNow } from "./use-now";
@@ -54,25 +54,41 @@ export function useSignalConsole(): SignalConsole {
   // entry rule works in milliseconds — keep the two apart deliberately.
   const startSec = pmRoundStart(now);
   const start = startSec * 1000;
-  const tick = Math.floor(now / BOOK_POLL_MS);
 
-  const btcRound = useQuery(api.polymarket.pmRound, {
-    asset: "btc",
-    start: startSec,
-    _tick: tick,
-  });
-  const ethRound = useQuery(api.polymarket.pmRound, {
-    asset: "eth",
-    start: startSec,
-    _tick: tick,
-  });
-  const rounds = useMemo(
-    () => ({ btc: btcRound ?? null, eth: ethRound ?? null }),
-    [btcRound, ethRound],
-  );
-
+  // Convex only allows outbound fetch from actions, and actions cannot be
+  // subscribed like a query — so the book is polled on a timer instead.
+  const fetchRound = useAction(api.polymarket.fetchRound);
+  const syncResolutions = useAction(api.polymarket.syncResolutions);
   const logSignal = useMutation(api.signals.logSignal);
-  const syncResolutions = useMutation(api.signals.syncResolutions);
+
+  const [rounds, setRounds] = useState<Partial<Record<PmAsset, PmRound | null>>>({
+    btc: null,
+    eth: null,
+  });
+  const bucket = Math.floor(now / BOOK_POLL_MS);
+  const inFlightRef = useRef(false);
+
+  useEffect(() => {
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
+    let cancelled = false;
+
+    void Promise.all(ASSETS.map((asset) => fetchRound({ asset, start: startSec })))
+      .then(([btc, eth]) => {
+        if (cancelled) return;
+        setRounds({ btc: btc ?? null, eth: eth ?? null });
+      })
+      .catch((error: unknown) => {
+        console.warn("[signal-console] could not refresh the Polymarket book", error);
+      })
+      .finally(() => {
+        inFlightRef.current = false;
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [fetchRound, startSec, bucket]);
 
   /**
    * The Binance candle engine is no longer the decision — it is a second,

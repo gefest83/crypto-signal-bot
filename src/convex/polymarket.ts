@@ -13,11 +13,30 @@
  * from the UP side: whoever sells DOWN at x is buying UP at 1 - x.
  */
 
+import { getAuthUserId } from "@convex-dev/auth/server";
 import { v } from "convex/values";
-import { query } from "./_generated/server";
+import { api } from "./_generated/api";
+import { action } from "./_generated/server";
 
 const GAMMA = "https://gamma-api.polymarket.com";
 const ROUND_S = 300;
+
+/** Polymarket's published outcome for a market slug, or null while unresolved. */
+export async function settledUp(slug: string): Promise<boolean | null> {
+  try {
+    const response = await fetch(`${GAMMA}/events?slug=${slug}`);
+    if (!response.ok) return null;
+    const events = (await response.json()) as Record<string, unknown>[];
+    const market = (events[0]?.markets as Record<string, unknown>[] | undefined)?.[0];
+    if (!market) return null;
+    const prices = JSON.parse(String(market.outcomePrices)) as string[];
+    if (prices[0] === "1" && prices[1] === "0") return true;
+    if (prices[0] === "0" && prices[1] === "1") return false;
+  } catch {
+    /* not resolved yet */
+  }
+  return null;
+}
 
 export const PM_ASSETS = ["btc", "eth"] as const;
 export type PmAsset = (typeof PM_ASSETS)[number];
@@ -90,19 +109,17 @@ async function topOfBook(
 }
 
 /**
- * Fetch one round by asset and interval start. Resolves to a PmRound with
- * `upWon: null` while the market is still running, and to a settled `upWon`
- * once Polymarket has published the result.
+ * Fetch one round by asset and interval start.
+ *
+ * This is an ACTION, not a query: Convex only allows outbound `fetch` from
+ * actions, and this handler reads Polymarket's live book. Resolves to a
+ * PmRound with `upWon: null` while the market is running, and to a settled
+ * `upWon` once Polymarket has published the result.
  */
-export const pmRound = query({
+export const fetchRound = action({
   args: {
     asset: v.union(v.literal("btc"), v.literal("eth")),
     start: v.number(),
-    /**
-     * Purely a cache-buster. The console passes a value that changes every few
-     * seconds so the book is re-read on a timer without polling from scratch.
-     */
-    _tick: v.optional(v.number()),
   },
   handler: async (_ctx, args): Promise<PmRound | null> => {
     const slug = pmSlug(args.asset, args.start);
@@ -167,5 +184,39 @@ export const pmRound = query({
       closed,
       upWon,
     };
+  },
+});
+
+/**
+ * Grade every still-open call against Polymarket's published result.
+ *
+ * Lives in an action because it makes outbound requests; the writes go through
+ * the `applyResolution` mutation, which re-checks ownership. The console calls
+ * it on a timer, so the bot never invents an outcome — it reads the one the
+ * exchange settled on.
+ */
+export const syncResolutions = action({
+  args: { limit: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return { resolved: 0 };
+
+    const rows = await ctx.runQuery(api.signals.unresolvedSignals, {
+      limit: args.limit ?? 20,
+    });
+
+    let resolved = 0;
+    for (const row of rows) {
+      if (row.outcome) continue;
+      if (row.windowEnd + 5000 > Date.now()) continue;
+      if (!row.marketSlug) continue;
+
+      const upWon = await settledUp(row.marketSlug);
+      if (upWon === null) continue;
+
+      await ctx.runMutation(api.signals.applyResolution, { id: row._id, upWon });
+      resolved += 1;
+    }
+    return { resolved };
   },
 });

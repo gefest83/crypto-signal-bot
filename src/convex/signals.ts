@@ -13,26 +13,11 @@ import { signalFactorValidator } from "./schema";
  * Now a call is only ever written when the bot has a real Polymarket ask, the
  * real ask is stored alongside it, and the call is graded against Polymarket's
  * own published result for that market. No price in this file is estimated.
+ *
+ * Note the deliberate absence of `fetch` here: Convex only allows outbound
+ * requests from actions, so reading Polymarket's resolution lives in
+ * `polymarket.syncResolutions`, which calls `applyResolution` below.
  */
-
-const GAMMA = "https://gamma-api.polymarket.com";
-
-/** Read Polymarket's published outcome for a market slug. */
-async function settledUp(slug: string): Promise<boolean | null> {
-  const response = await fetch(`${GAMMA}/events?slug=${slug}`);
-  if (!response.ok) return null;
-  const events = (await response.json()) as Record<string, unknown>[];
-  const market = (events[0]?.markets as Record<string, unknown>[] | undefined)?.[0];
-  if (!market) return null;
-  try {
-    const prices = JSON.parse(String(market.outcomePrices)) as string[];
-    if (prices[0] === "1" && prices[1] === "0") return true;
-    if (prices[0] === "0" && prices[1] === "1") return false;
-  } catch {
-    /* not resolved yet */
-  }
-  return null;
-}
 
 export const logSignal = mutation({
   args: {
@@ -85,38 +70,22 @@ export const logSignal = mutation({
 });
 
 /**
- * Grade every still-open call against Polymarket's published result.
+ * Apply one resolution read by the `syncResolutions` action.
  *
- * Runs on a timer from the console: the bot never invents an outcome, it reads
- * the one the exchange settled on.
+ * The action does the network read; this mutation does the write, so ownership
+ * is re-checked here rather than trusted from the caller.
  */
-export const syncResolutions = mutation({
-  args: { limit: v.optional(v.number()) },
-  handler: async (ctx, args) => {
+export const applyResolution = mutation({
+  args: { id: v.id("signals"), upWon: v.boolean() },
+  handler: async (ctx, { id, upWon }) => {
     const userId = await getAuthUserId(ctx);
-    if (!userId) return { resolved: 0 };
-
-    const rows = await ctx.db
-      .query("signals")
-      .withIndex("by_user_window", (q) => q.eq("userId", userId))
-      .order("desc")
-      .take(args.limit ?? 20);
-
-    let resolved = 0;
-    for (const row of rows) {
-      if (row.outcome) continue;
-      if (row.windowEnd + 5000 > Date.now()) continue;
-      const slug = row.marketSlug;
-      if (!slug) continue;
-
-      const upWon = await settledUp(slug);
-      if (upWon === null) continue;
-
-      const outcome = (upWon ? "up" : "down") === row.direction ? "win" : "loss";
-      await ctx.db.patch(row._id, { upWon, outcome, resolvedAt: Date.now() });
-      resolved += 1;
-    }
-    return { resolved };
+    if (!userId) return null;
+    const signal = await ctx.db.get(id);
+    if (!signal || signal.userId !== userId) return null;
+    if (signal.outcome) return signal.outcome;
+    const outcome = (upWon ? "up" : "down") === signal.direction ? "win" : "loss";
+    await ctx.db.patch(id, { upWon, outcome, resolvedAt: Date.now() });
+    return outcome;
   },
 });
 
@@ -131,21 +100,6 @@ export const unresolvedSignals = query({
       .order("desc")
       .take(limit ?? 30);
     return rows.filter((row) => row.outcome === undefined);
-  },
-});
-
-/** Kept for callers that want to grade one round themselves. */
-export const resolveSignal = mutation({
-  args: { id: v.id("signals"), upWon: v.boolean() },
-  handler: async (ctx, { id, upWon }) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) return null;
-    const signal = await ctx.db.get(id);
-    if (!signal || signal.userId !== userId) return null;
-    if (signal.outcome) return signal.outcome;
-    const outcome = (upWon ? "up" : "down") === signal.direction ? "win" : "loss";
-    await ctx.db.patch(id, { upWon, outcome, resolvedAt: Date.now() });
-    return outcome;
   },
 });
 
