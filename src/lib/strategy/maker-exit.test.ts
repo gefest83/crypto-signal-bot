@@ -5,11 +5,12 @@ import {
   EXIT_SLIPPAGE,
   LIMIT_MAX,
   LIMIT_MIN,
-  MAKER_REBATE,
   MIN_STAKE_USD,
   STAKE_OPTIONS_USD,
+  TRADE_FEE_RATE,
   decideMakerAction,
   expectedPnlPerStake,
+  feePerShare,
   makerPnl,
   planMakerTrade,
   requiredSurvivorWinRate,
@@ -44,21 +45,26 @@ describe("размер заявки в долларах, а не в шарах",
     expect(sharesForStake(1, 0.35)).toBeCloseTo(1 / 0.35, 10);
   });
 
-  it("проигрыш стоит полный стейк, а не цену лимита", () => {
-    // 2.86 шары × (−0.35) = −1.00
-    expect(stakePnl(1, 0.35, false, false)).toBeCloseTo(-1 + MAKER_REBATE / 0.35, 10);
+  it("проигрыш стоит полный стейк плюс комиссия 2%", () => {
+    // 2.86 шары × (−0.35) = −1.00, и сверху 2% от $1 = −0.02. Итого −1.02.
+    // Раньше здесь стоял ребейт, и экран показывал −0.99 на сделке, которая
+    // на самом деле стоит доллар два.
+    expect(stakePnl(1, 0.35, false, false)).toBeCloseTo(-1.02, 10);
   });
 
-  it("выигрыш приносит больше стейка, потому что шар больше доллара", () => {
-    // 2.86 шары × 0.65 = +1.86
-    expect(stakePnl(1, 0.35, true, false)).toBeCloseTo(1.857142857 + MAKER_REBATE / 0.35, 6);
+  it("выигрыш тоже платит комиссию — она не возвращается при победе", () => {
+    // 2.86 шары × 0.65 = +1.857, минус 2% от $1.
+    expect(stakePnl(1, 0.35, true, false)).toBeCloseTo(1.857142857 - 0.02, 6);
   });
 
-  it("выход в ноль стоит проскальзывания на каждый шар", () => {
-    expect(stakePnl(1, 0.35, false, true)).toBeCloseTo(
-      -EXIT_SLIPPAGE / 0.35 + MAKER_REBATE / 0.35,
-      10,
-    );
+  it("выход в ноль стоит проскальзывания и комиссии вместе", () => {
+    // 2.86 шары × (0.02 проскальзывание + 0.007 комиссия) = −7.7¢
+    expect(stakePnl(1, 0.35, false, true)).toBeCloseTo(-0.077142857, 8);
+  });
+
+  it("комиссия считается от стейка, а не от шар", () => {
+    // 2% от цены покупки одной шары = 0.7 цента на шар.
+    expect(feePerShare(0.35)).toBeCloseTo(0.007, 10);
   });
 
   it("масштабируется линейно: $5 и $10 — ровно в 5 и 10 раз", () => {
@@ -70,37 +76,37 @@ describe("размер заявки в долларах, а не в шарах",
     }
   });
 
-  it("риск на сделку — это стейк, и он известен заранее", () => {
+  it("риск на сделку — это стейк плюс комиссия, и он известен заранее", () => {
     const outcomes = stakeOutcomes(10, 0.35);
-    // Проигрыш ограничен стейком и не может быть хуже.
-    expect(outcomes.lost).toBeGreaterThan(-10.0001);
+    // $10 стейка проигрывается целиком плюс 2% = −10.20. Хуже не бывает.
+    expect(outcomes.lost).toBeCloseTo(-10.2, 8);
     expect(outcomes.won).toBeGreaterThan(0);
     // Выход всегда дешевле проигрыша.
     expect(outcomes.exited).toBeGreaterThan(outcomes.lost);
   });
 
-  it("измеренный плюс переносится на $1 стейк без потери смысла", () => {
-    // +2.1¢ на шару при 0.35 — это +6¢ на доллар стейка.
-    expect(expectedPnlPerStake(1, 0.35)).toBeCloseTo(0.021 / 0.35, 10);
-    expect(expectedPnlPerStake(1, 0.35)).toBeGreaterThan(0);
+  it("измеренный плюс переносится на $1 стейк и остаётся плюсом", () => {
+    // 0.020 × 2.857 шары = +5.7¢, минус 2¢ комиссии = +3.7¢ на $1 стейк.
+    // Это ровно та цифра, которую дал walk-forward с комиссией: +0.013 на шару.
+    const perStake = expectedPnlPerStake(1, 0.35);
+    expect(perStake).toBeCloseTo(0.02 / 0.35 - 0.02, 10);
+    expect(perStake).toBeGreaterThan(0);
   });
 });
 
 describe("P&L по реальной цене", () => {
-  it("мейкер не платит комиссию — платит только проскальзывание выхода", () => {
-    // Закрытая по выходу сделка стоит ровно проскальзывание.
-    expect(makerPnl(0.35, false, true)).toBeCloseTo(-EXIT_SLIPPAGE + MAKER_REBATE, 10);
+  it("комиссия 2% вычитается из закрытой по выходу сделки", () => {
+    expect(makerPnl(0.35, false, true)).toBeCloseTo(-EXIT_SLIPPAGE - 0.007, 10);
   });
 
-  it("удержавшаяся сделка платит полную ставку", () => {
-    expect(makerPnl(0.35, false, false)).toBeCloseTo(-0.35 + MAKER_REBATE, 10);
-    expect(makerPnl(0.35, true, false)).toBeCloseTo(0.65 + MAKER_REBATE, 10);
+  it("удержавшаяся сделка платит полную ставку и комиссию", () => {
+    expect(makerPnl(0.35, false, false)).toBeCloseTo(-0.35 - 0.007, 10);
+    expect(makerPnl(0.35, true, false)).toBeCloseTo(0.65 - 0.007, 10);
   });
 
-  it("выход дороже, чем кажется, если считать от нуля", () => {
-    // При лимите 0.35 «безубыточный» выход на деле стоит 2 цента.
+  it("«безубыточный» выход на деле стоит 2.7 цента на шар", () => {
     const plan = planMakerTrade("up", 0.35);
-    expect(plan.roundTripCost).toBe(EXIT_SLIPPAGE);
+    expect(plan.roundTripCost).toBeCloseTo(EXIT_SLIPPAGE + TRADE_FEE_RATE * 0.35, 10);
     expect(plan.breakevenExit).toBe(0.35);
     expect(plan.winnerPayoff).toBeCloseTo(0.65, 10);
   });
@@ -118,6 +124,15 @@ describe("сколько должны выигрывать удержавшие�
     // У победителя остаётся 1 − limit, поэтому дорогой вход требует большей
     // доли правильных удержавшихся сделок, чтобы окупить выходы.
     expect(requiredSurvivorWinRate(0.55, 0.91)).toBeGreaterThan(requiredSurvivorWinRate(0.2, 0.91));
+  });
+
+  it("комиссия поднимает планку выше, чем было без неё", () => {
+    // Закрытая сделка стоила 2 цента, теперь 2.7 — и требуемая доля побед
+    // удержавшихся выросла ровно на треть. Запас до измеренных 76% огромный.
+    const withFee = requiredSurvivorWinRate(0.35, 0.09);
+    const withoutFee = ((1 - 0.09) * EXIT_SLIPPAGE) / (0.09 * (1 - 0.35));
+    expect(withFee).toBeCloseTo(withoutFee * 1.35, 10);
+    expect(withFee).toBeLessThan(planMakerTrade("up", 0.35).survivorWinRate);
   });
 });
 

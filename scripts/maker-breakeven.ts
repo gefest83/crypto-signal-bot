@@ -62,8 +62,15 @@ type Trade = {
   pnl: number;
 };
 
-/** Makers pay no fee; they receive this share of collected taker fees. */
-const REBATE = 0.07 * 0.2 * 0.15;
+/**
+ * Charged on every trade: 2% of the stake.
+ *
+ * This replaced a rebate assumption that was never checked against the real
+ * fee schedule. At a 0.35 limit it is 0.7c per share, which is small enough to
+ * look negligible and large enough to flip a marginal result — so it is applied
+ * per share here exactly as `makerPnl` applies it in the app.
+ */
+const FEE_RATE = 0.02;
 /**
  * What the breakeven exit really costs.
  *
@@ -101,14 +108,14 @@ function simulate(round: Round, limit: number, up: boolean): Trade | null {
   const exited = path.slice(fillIdx + 1).some((s) => side(s.p) <= limit);
 
   const gross = exited ? -EXIT_SLIP : base.won ? 1 - limit : -limit;
-  return { ...base, filled: true, exited, pnl: gross + REBATE };
+  return { ...base, filled: true, exited, pnl: gross - FEE_RATE * limit };
 }
 
 const LIMITS = [0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85];
 
 console.log(`\n=== ${INTERVAL}m · maker + breakeven exit · ${DAYS}d · limit rest from t+${ENTRY_S}s ===`);
 console.log(`   exit slippage ${(EXIT_SLIP * 100).toFixed(0)}c per round-tripped trade\n`);
-console.log("   limit   side   fills   exit%   win%    P&L/trade   total      (net of maker rebate)");
+console.log("   limit   side   fills   exit%   win%    P&L/trade   total      (net of 2% fee)");
 console.log("   " + "-".repeat(78));
 
 const results: { limit: number; up: boolean; trades: Trade[] }[] = [];

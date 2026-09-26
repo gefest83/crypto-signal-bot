@@ -21,11 +21,11 @@
  * fee, enter patiently, and cut the position the moment the market disagrees.
  *
  * Measured over 30 days and 5760 real 15-minute rounds, per one share bought at
- * the 0.35 limit (a $1 stake is 2.86 of these):
- *   walk-forward          +0.021 per share, positive in every week
- *   losing days           3 of 31
- *   after a 2c exit cost  still +0.022
- *   the live book spreads 0.01, so that 2c assumption is conservative
+ * the 0.35 limit (a $1 stake is 2.86 of these), with the 2% commission applied:
+ *   walk-forward          +0.013 per share, positive in every week
+ *   losing days           8 of 31
+ *   a $1 stake            +1.7c
+ *   the live book spreads 0.01, so the 2c exit assumption is conservative
  *
  * What this still assumes, and what a minute-granularity price series cannot
  * check: that the breakeven sell actually fills. The live spread is one tick,
@@ -40,8 +40,17 @@ export const LIMIT_MAX = 0.55;
 export const DEFAULT_LIMIT = 0.35;
 /** A resting sell fills at or below the offer; the live book is one tick wide. */
 export const EXIT_SLIPPAGE = 0.02;
-/** Makers are never charged, and receive this share of collected taker fees. */
-export const MAKER_REBATE = 0.07 * 0.2 * 0.15;
+/**
+ * Charged on every trade: 2% of the USDC stake, regardless of how it ends.
+ *
+ * This replaced an earlier assumption that makers pay nothing and collect a
+ * rebate. They do not, and that mistake was worth real money — on a $1 stake
+ * it turned a −$1.02 loss into a displayed −$0.99, and it flattered the
+ * measured edge by roughly a cent per share. A commission is a cost, so it is
+ * subtracted here, and it is charged on the stake rather than on the shares,
+ * which is what makes it bite hardest exactly when the position is largest.
+ */
+export const TRADE_FEE_RATE = 0.02;
 
 /**
  * Polymarket does not sell shares — it sells USDC. A $1 order at a 0.35 limit
@@ -64,32 +73,51 @@ export function sharesForStake(stake: number, limit: number = DEFAULT_LIMIT): nu
 }
 
 /**
- * The walk-forward results, as measured, in USDC per single share bought at
- * `DEFAULT_LIMIT`. A share costs 0.35, so these convert to a real $1 stake by
- * dividing by the limit — see `expectedPnlPerStake`.
+ * The walk-forward results, in USDC per single share bought at `DEFAULT_LIMIT`.
  *
- * Measured over 30 days and 5760 real 15-minute rounds.
+ * These are GROSS of the trading commission: the raw price behaviour of the
+ * market, with no fee applied. A share costs 0.35, so they convert to a real $1
+ * stake by dividing by the limit — see `expectedPnlPerStake`, which is the
+ * only number that should ever be shown, because it is the one net of fees.
+ *
+ * Measured over 30 days and 5760 real 15-minute rounds, re-run with the 2%
+ * commission applied (see `scripts/maker-breakeven.ts`):
+ *   walk-forward          +0.013 per share, positive in every week
+ *   losing days           8 of 31
+ *   entry without exit    −0.095 per share
  */
 export const MEASURED_PER_SHARE = {
-  /** Maker entry plus breakeven exit. Positive in every week. */
-  pnlWithExit: 0.021,
-  /** The same fills held to resolution. This is the trap. */
-  pnlEntryOnly: -0.102,
+  /** Maker entry plus breakeven exit, before commission. */
+  pnlWithExit: 0.02,
+  /** The same fills held to resolution, before commission. This is the trap. */
+  pnlEntryOnly: -0.0951,
   /** How often the contract comes back to the limit. */
   exitRate: 0.91,
   /** Of the trades that never came back, how many won. */
   survivorWinRate: 0.76,
-  losingDays: "3 из 31",
+  losingDays: "8 из 31",
   rounds: 5760,
 } as const;
 
-/** The same measured result expressed on a real USDC stake. */
+/** The commission one share costs, in USDC. */
+export function feePerShare(limit: number = DEFAULT_LIMIT): number {
+  return TRADE_FEE_RATE * limit;
+}
+
+/**
+ * The same measured result expressed on a real USDC stake, net of commission.
+ *
+ * Dividing the limit out is what makes this honest: a $1 stake is 2.86 shares,
+ * so every outcome scales by that much AND pays 2% on the dollar. Skipping the
+ * commission step is what produced a screen that claimed −$0.99 on a trade that
+ * actually loses $1.02.
+ */
 export function expectedPnlPerStake(
   stake: number,
   limit: number = DEFAULT_LIMIT,
-  perShare: number = MEASURED_PER_SHARE.pnlWithExit,
+  grossPerShare: number = MEASURED_PER_SHARE.pnlWithExit,
 ): number {
-  return sharesForStake(stake, limit) * perShare;
+  return sharesForStake(stake, limit) * grossPerShare - stake * TRADE_FEE_RATE;
 }
 
 export type Side = "up" | "down";
@@ -113,8 +141,8 @@ export function planMakerTrade(side: Side, limit: number = DEFAULT_LIMIT): Maker
     side,
     limit,
     breakevenExit: limit,
-    roundTripCost: EXIT_SLIPPAGE,
-    // A winner pays 1 - limit; a round-tripped trade costs only the exit.
+    roundTripCost: EXIT_SLIPPAGE + TRADE_FEE_RATE * limit,
+    // A winner pays 1 - limit; a round-tripped trade costs the exit plus the fee.
     winnerPayoff: 1 - limit,
     survivorWinRate: 0.76,
   };
@@ -126,17 +154,19 @@ export function planMakerTrade(side: Side, limit: number = DEFAULT_LIMIT): Maker
  * denominated in USDC, so anything the user sees goes through `stakePnl`.
  */
 export function makerPnl(limit: number, won: boolean, exited: boolean): number {
-  if (exited) return -EXIT_SLIPPAGE + MAKER_REBATE;
-  return (won ? 1 - limit : -limit) + MAKER_REBATE;
+  // The fee is 2% of the stake, so per share it is 2% of what that share cost.
+  const fee = TRADE_FEE_RATE * limit;
+  if (exited) return -EXIT_SLIPPAGE - fee;
+  return (won ? 1 - limit : -limit) - fee;
 }
 
 /**
  * P&L in USDC on a real order of `stake` dollars, filled at `limit`.
  *
  * A $1 stake at 0.35 is 2.86 shares, so the outcomes are:
- *   won and held   +$1.86   (2.86 shares pay out 2.86 against a $1 cost)
- *   lost and held  −$1.00   (the whole stake, capped)
- *   exited         −$0.06   (sold back 2 cents under the limit)
+ *   won and held   +$1.84   (2.86 shares pay out 2.86 against a $1 cost, less 2¢ fee)
+ *   lost and held  −$1.02   (the whole stake plus 2% commission)
+ *   exited         −$0.08   (sold back 2 cents under the limit, plus 2% commission)
  *
  * The risk on a trade is the full stake, not the limit — which is the number
  * that has to govern position sizing, and the reason the loss side of this
@@ -170,8 +200,9 @@ export function stakeOutcomes(
  * matters when the losing side is already capped at the exit cost.
  */
 export function requiredSurvivorWinRate(limit: number, survivorRate: number): number {
-  // Round-tripped trades lose EXIT_SLIPPAGE each. Survivors must cover that.
-  const losersPay = (1 - survivorRate) * EXIT_SLIPPAGE;
+  // Round-tripped trades lose the exit slippage plus the commission on the
+  // stake; survivors must cover that on a trade that costs the limit to enter.
+  const losersPay = (1 - survivorRate) * (EXIT_SLIPPAGE + TRADE_FEE_RATE * limit);
   const winnersEarn = survivorRate * (1 - limit);
   if (winnersEarn <= 0) return 1;
   return losersPay / winnersEarn;

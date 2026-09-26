@@ -4,6 +4,7 @@ import {
   LIMIT_MAX,
   LIMIT_MIN,
   MIN_STAKE_USD,
+  TRADE_FEE_RATE,
 } from "@/lib/strategy/maker-exit";
 
 const RULES: { index: string; title: string; body: string; items?: { label: string; value: string }[] }[] =
@@ -16,12 +17,12 @@ const RULES: { index: string; title: string; body: string; items?: { label: stri
     {
       index: "02",
       title: "Вход только лимитной заявкой",
-      body: "Polymarket берёт с тейкера 7% × (1 − цена): при цене 0.30 это 4.9% ставки, то есть ровно величина перекоса, ради которого всё затевалось. Мейкер не платит ничего и получает 20% сборов обратно — поэтому весь перевес и есть вход без комиссии.",
+      body: `Polymarket берёт с тейкера 7% × (1 − цена): при цене 0.30 это 4.9% ставки, то есть ровно величина перекоса, ради которого всё затевалось. Лимитная заявка этой комиссии не платит, но и не возвращает ничего — платит ${(TRADE_FEE_RATE * 100).toFixed(0)}% от стейка с каждой сделки.`,
       items: [
         { label: "Лимит", value: `${LIMIT_MIN}–${LIMIT_MAX}, рабочий ${DEFAULT_LIMIT.toFixed(2)}` },
         { label: "Заявка", value: `$${MIN_STAKE_USD} = ${(1 / DEFAULT_LIMIT).toFixed(2)} шар` },
         { label: "Комиссия тейкера при 0.30", value: "4.9%" },
-        { label: "Комиссия мейкера", value: "0%" },
+        { label: "Комиссия", value: `${(TRADE_FEE_RATE * 100).toFixed(0)}% от стейка` },
       ],
     },
     {
@@ -37,6 +38,7 @@ const RULES: { index: string; title: string; body: string; items?: { label: stri
         { label: "Возврат к лимиту", value: "91% случаев" },
         { label: "Удержавшиеся выигрывают", value: "76%" },
         { label: "Возврат удержавшихся", value: "9%" },
+        { label: "Цена закрытой сделки", value: `−${((EXIT_SLIPPAGE + TRADE_FEE_RATE * DEFAULT_LIMIT) * 100).toFixed(1)}¢ на шар` },
       ],
     },
     {

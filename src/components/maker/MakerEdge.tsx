@@ -3,7 +3,7 @@ import {
   DEFAULT_LIMIT,
   EXIT_SLIPPAGE,
   MEASURED_PER_SHARE,
-  MAKER_REBATE,
+  TRADE_FEE_RATE,
   expectedPnlPerStake,
   stakeOutcomes,
   type StakeUsd,
@@ -123,9 +123,9 @@ export function MakerEdge({ stake }: { stake: StakeUsd }) {
             </p>
             <p className="mt-1">
               Допущение о {(EXIT_SLIPPAGE * 100).toFixed(0)}ц на выход консервативно: реальный
-              спред этих рынков — 1 тик, а ребейт мейкера добавляет{" "}
-              {(MAKER_REBATE * 100).toFixed(2)}¢ на шар, то есть{" "}
-              {((MAKER_REBATE / DEFAULT_LIMIT) * 100).toFixed(2)}¢ на стейк ${stake}.
+              спред этих рынков — 1 тик. Комиссия {(TRADE_FEE_RATE * 100).toFixed(0)}% от
+              стейка уже вычтена из всех цифр выше: на $1 это 2 цента с каждой сделки,
+              независимо от исхода.
             </p>
             <p className="mt-1">
               Направление не прогнозируется. На 80% срока раунда лучший из предикторов даёт 93.2%
