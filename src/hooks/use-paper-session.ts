@@ -16,11 +16,13 @@ import {
 } from "@/lib/strategy/maker-exit";
 import {
   DEFAULT_PAPER,
+  canRestBuy,
   checkBuyFill,
   checkSellFill,
   closePosition,
   openPosition,
   settlePosition,
+  type FillCheck,
   type PaperPosition,
   type PaperSettings,
 } from "@/lib/strategy/paper";
@@ -142,14 +144,23 @@ export type PaperConsole = {
 };
 
 /**
- * The cheap side is the one we quote.
+ * The side we quote is the EXPENSIVE one, and that is not a preference.
  *
- * DOWN is an exact complement of UP, so exactly one of the two asks is below
- * 0.50 at any moment, and the interval's limit is therefore always reachable
- * on one side without us forecasting anything.
+ * A buy limit at 0.50 can only rest while the ask is above 0.50. Quote the
+ * cheap side instead and the order crosses the spread the instant it is sent,
+ * filling at a price nobody chose. DOWN is an exact complement of UP, so
+ * exactly one of the two asks is above 0.50, and that is the only side where
+ * the limit is reachable without us forecasting anything.
+ *
+ * When neither side clears the limit — which happens when the round has run
+ * far enough for the market to be decided — there is nothing to quote, and
+ * the honest answer is to sit the round out.
  */
-function candidateSide(upAsk: number | null): "up" | "down" {
-  return upAsk !== null && upAsk < 0.5 ? "up" : "down";
+function quoteableSide(upAsk: number | null, limit: number): "up" | "down" | null {
+  if (upAsk === null) return null;
+  if (upAsk > limit + 1e-9) return "up";
+  const downAsk = 1 - upAsk;
+  return downAsk > limit + 1e-9 ? "down" : null;
 }
 
 const empty = (
@@ -265,16 +276,23 @@ export function usePaperSession(
         }
         const session: PaperSession = { ...existing, stake, limit };
         if (round?.upAsk != null) {
-          session.side = session.side ?? candidateSide(round.upAsk);
-          session.ask = session.side === "up" ? round.upAsk : round.downAsk;
-          session.bid = session.side === "up" ? round.upBid : round.downBid;
+          const side = session.side ?? quoteableSide(round.upAsk, session.limit);
+          session.side = side;
+          session.ask = side === "up" ? round.upAsk : side === "down" ? round.downAsk : null;
+          session.bid = side === "up" ? round.upBid : side === "down" ? round.downBid : null;
         }
 
         const book = { bid: session.bid, ask: session.ask, depthAtLimit: 0, now };
         const held = positions[market.key];
 
         if (session.state === "quoting") {
-          const check = checkBuyFill(session.limit, book, settings);
+          // A limit at or above the ask is not a resting order. Quoting it
+          // would manufacture an instant fill, and the round would round-trip
+          // for a pure commission loss with no market event involved.
+          const restable = canRestBuy(session.limit, session.ask);
+          const check: FillCheck = restable.filled
+            ? checkBuyFill(session.limit, book, settings)
+            : { filled: false, reason: restable.reason };
           if (check.filled) {
             const order = {
               id: `${market.key}-${session.roundStart}`,

@@ -112,6 +112,29 @@ describe("профили двух рынков не взаимозаменяем
     }
   });
 
+  it("виртуальный движок даёт МЕНЬШЕ, чем бэктест, — иначе он не строже", () => {
+    // Профиль собран на mid-истории, где набитие засчитывалось по касанию.
+    // Бумажный движок требует проникновения и платит комиссию дважды, поэтому
+    // его EV обязан быть ниже. Если он когда-нибудь окажется выше — значит
+    // кто-то снял строгость, и это повод разбираться, а не радоваться.
+    for (const interval of [5, 15] as const) {
+      const p = MARKET_PROFILES[interval];
+      const limit = PM_LIMITS[interval];
+      const shares = 5 / limit;
+      const fee = 0.02;
+      const exit = -(shares * 0.02) - 5 * fee * 2;
+      const won = shares - 5 - 5 * fee * 2;
+      const lost = -5 - 5 * fee;
+      const ev =
+        p.exitRate * exit +
+        (1 - p.exitRate) * (p.survivorWinRate * won + (1 - p.survivorWinRate) * lost);
+      const perShare = ev / shares;
+      expect(perShare).toBeLessThan(p.evPerShare);
+      // Но и не должен развалиться в ноль: профиль проверялся по-настоящему.
+      expect(perShare).toBeGreaterThan(0);
+    }
+  });
+
   it("длина раунда выводится из интервала, а не задаётся руками", () => {
     expect(roundSeconds(5)).toBe(300);
     expect(roundSeconds(15)).toBe(900);

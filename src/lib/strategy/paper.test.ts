@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_PAPER,
+  EXIT_SLIPPAGE,
+  canRestBuy,
   checkBuyFill,
   checkSellFill,
   closePosition,
   isQuoteStale,
   openPosition,
+  quoteableSide,
   sessionPnl,
   settlePosition,
   type BookSnapshot,
@@ -83,10 +86,13 @@ describe("выход проходит по тому же правилу", () => 
     expect(d.filled).toBe(false);
   });
 
-  it("bid на тик выше лимита — выход исполняется", () => {
+  it("bid на тик выше лимита — выход исполняется, но на 2ц ниже уровня", () => {
+    // Цена исполнения не равна лимиту: мы продаём В bid, который стоит под
+    // восстановленным уровнем. Раньше здесь было ровно 0.48, и круг
+    // возвращал стейк целиком.
     const d = checkSellFill(0.48, book({ bid: 0.49 }));
     expect(d.filled).toBe(true);
-    if (d.filled) expect(d.fillPrice).toBe(0.48);
+    if (d.filled) expect(d.fillPrice).toBeCloseTo(0.48 - EXIT_SLIPPAGE, 10);
   });
 
   it("symметрия: вход и выход требуют одинакового проникновения", () => {
@@ -145,6 +151,56 @@ describe("P&L виртуальной позиции", () => {
     const totals = sessionPnl([open]);
     expect(totals.realised).toBe(0);
     expect(totals.closed + totals.held).toBe(0);
+  });
+});
+
+describe("заявка должна уметь висеть в стакане, а не пересекать спред", () => {
+  it("лимит на уровне ask или ниже ставить нельзя", () => {
+    // Ровно этот баг стоил 32 одинаковых убытка по −$0.20: сторона выбиралась
+    // дешёвой, её ask был НИЖЕ лимита, заявка пересекала спред и набиралась
+    // мгновенно, а выход возвращал по той же цене. Итог — круг без события.
+    expect(canRestBuy(0.5, 0.5).filled).toBe(false);
+    expect(canRestBuy(0.5, 0.38).filled).toBe(false);
+    expect(canRestBuy(0.5, 0.51).filled).toBe(true);
+  });
+
+  it("котируем дорогую сторону — только она может вместить лимит", () => {
+    // DOWN — дополнение UP, поэтому ровно одна из двух сторон выше лимита.
+    expect(quoteableSide(0.62, 0.5)).toBe("up");
+    expect(quoteableSide(0.38, 0.5)).toBe("down");
+    // Когда обе стороны ушли за лимит — раунд уже решён, торговать нечем.
+    expect(quoteableSide(0.5, 0.5)).toBeNull();
+  });
+
+  it("ни одна из двух сторон не подходит, если ask == 0.50", () => {
+    expect(quoteableSide(0.5, 0.5)).toBeNull();
+  });
+});
+
+describe("выход платит проскальзывание, а не возвращает стейк", () => {
+  it("продажа проходит на 2ц НИЖЕ восстановленного уровня", () => {
+    // Вторая половина того же бага: выход засчитывался по цене входа, и
+    // круг возвращал ровно стейк минус двойную комиссию.
+    const d = checkSellFill(0.5, book({ bid: 0.51 }));
+    expect(d.filled).toBe(true);
+    if (d.filled) expect(d.fillPrice).toBeCloseTo(0.5 - EXIT_SLIPPAGE, 10);
+  });
+
+  it("круг на $5 по 0.50 стоит 30 центов, а не 20", () => {
+    const position = openPosition(filledOrder({ price: 0.5, stake: 5 }), 5, 0.02)!;
+    const closed = closePosition(position, 0.5 - EXIT_SLIPPAGE, 1_000_100, 0.02);
+    // 10 шар × 0.48 = 4.80 против 5.00, минус 2% на входе и на выходе.
+    expect(closed.pnl).toBeCloseTo(4.8 - 5 - 0.1 - 0.096, 10);
+    expect(Math.abs(closed.pnl ?? 0)).toBeGreaterThan(0.25);
+  });
+
+  it("каждый круг стоит больше одной комиссии — иначе он не круг, а подарок", () => {
+    // Минимально возможный убыток на круг обязан быть заметно больше 4%.
+    for (const limit of [0.35, 0.5]) {
+      const position = openPosition(filledOrder({ price: limit, stake: 5 }), 5, 0.02)!;
+      const closed = closePosition(position, limit - EXIT_SLIPPAGE, 1_000_100, 0.02);
+      expect(closed.pnl).toBeLessThan(-0.2);
+    }
   });
 });
 

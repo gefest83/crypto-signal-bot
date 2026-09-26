@@ -35,6 +35,16 @@
 /** Ticks on Polymarket's Up/Down books. Read from the book, not assumed. */
 export const DEFAULT_TICK = 0.01;
 
+/**
+ * What a resting exit actually costs, per share.
+ *
+ * The live book on these markets spreads one tick, so 2c is deliberately
+ * pessimistic — but it is the number the whole strategy is measured against,
+ * and crediting the exit at the restored level instead would quietly delete
+ * it.
+ */
+export const EXIT_SLIPPAGE = 0.02;
+
 /** What a paper trader is allowed to do, and what it is forbidden to assume. */
 export type PaperSettings = {
   /**
@@ -163,12 +173,20 @@ export function checkBuyFill(
  * profit came from exiting at breakeven, and it assumed the exit filled
  * whenever the bid came back to the entry price. Requiring penetration here
  * too is what turns that assumption into a number.
+ *
+ * The fill is booked at `limit − EXIT_SLIPPAGE`, NOT at `limit`. An earlier
+ * version credited the exit at the limit itself, which meant a round trip
+ * returned exactly the stake minus commission and nothing else — every trade
+ * lost the same 4% and the strategy could never be anything but a slow bleed.
+ * The exit is a sale INTO the bid, and the bid sits below the level we
+ * restored it to. That gap is the whole cost of getting out.
  */
 export function checkSellFill(
   limit: number,
   book: BookSnapshot,
   settings: PaperSettings = DEFAULT_PAPER,
   tick: number = DEFAULT_TICK,
+  exitSlippage: number = EXIT_SLIPPAGE,
 ): FillCheck {
   if (book.bid === null) {
     return { filled: false, reason: "нет котировки bid" };
@@ -184,9 +202,46 @@ export function checkSellFill(
   }
   return {
     filled: true,
-    fillPrice: limit,
-    reason: `bid дошёл до ${book.bid.toFixed(2)} — прошит выход ${limit.toFixed(2)}`,
+    fillPrice: Math.max(0.01, limit - exitSlippage),
+    reason: `bid дошёл до ${book.bid.toFixed(2)} — прошит выход ${limit.toFixed(2)}, продажа на ${(
+      limit - exitSlippage
+    ).toFixed(2)}`,
   };
+}
+
+/**
+ * Can we even rest this order?
+ *
+ * A buy limit at or above the ask is not a resting order, it is a marketable
+ * one: it crosses the spread and fills instantly at a price we did not choose.
+ * Quoting it would manufacture a fill out of nothing, which is exactly what an
+ * earlier version did — it picked the CHEAP side, whose ask sat below the
+ * limit, and every round produced a guaranteed instant "fill". Thirty-two
+ * identical small losses later, the shape of the bug was obvious.
+ *
+ * DOWN is an exact complement of UP, so exactly one of the two asks is above
+ * 0.50, and that is the only side where a 0.50 bid can rest.
+ */
+export function canRestBuy(limit: number, ask: number | null): FillCheck {
+  if (ask === null) return { filled: false, reason: "нет котировки ask" };
+  if (ask <= limit + 1e-9) {
+    return {
+      filled: false,
+      reason: `ask ${ask.toFixed(2)} уже на лимите ${limit.toFixed(2)} или ниже — заявка пересекла бы спред, встаём только на дорогую сторону`,
+    };
+  }
+  return { filled: true, fillPrice: limit, reason: `ask ${ask.toFixed(2)} выше лимита — заявка может висеть` };
+}
+
+/** The side worth quoting: the one whose ask is ABOVE the limit. */
+export function quoteableSide(
+  upAsk: number | null,
+  limit: number,
+): "up" | "down" | null {
+  if (upAsk === null) return null;
+  if (upAsk > limit) return "up";
+  const downAsk = 1 - upAsk;
+  return downAsk > limit ? "down" : null;
 }
 
 /** A quote that has been resting too long is a liability, not an opportunity. */
@@ -216,7 +271,8 @@ export function openPosition(
     stake,
     shares: stake / price,
     openedAt: order.filledAt ?? order.placedAt,
-    // The exit we can actually profit from, net of the fee we will pay on it.
+    // The level we restore before selling. The sale itself lands a tick or two
+    // below this — see `checkSellFill`.
     exitPrice: price,
     status: "open",
     closedAt: null,

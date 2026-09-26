@@ -78,18 +78,27 @@ function ProfileCard({ profile, stake }: { profile: MarketProfile; stake: number
   const limit = PM_LIMITS[profile.interval];
   const perStake = profile.grossPerShare * (stake / limit) - stake * TRADE_FEE_RATE;
   const shares = stake / limit;
+  // A round trip pays the commission TWICE: once to buy, once to sell. The
+  // paper engine charges it on both legs, so the profile has to as well —
+  // quoting the single-fee number here made the exit look $0.10 cheaper than
+  // it is, and the exit is what four fifths of all trades depend on.
+  const feeBothWays = stake * TRADE_FEE_RATE * 2;
   const outcomes = [
-    { label: "держали, выиграли", value: stake * (1 - limit) - stake * TRADE_FEE_RATE, good: true },
-    { label: "держали, проиграли", value: -stake * (1 + TRADE_FEE_RATE), good: false },
+    {
+      label: "держали, выиграли",
+      value: shares - stake - feeBothWays,
+      good: true,
+    },
+    { label: "держали, проиграли", value: -stake - stake * TRADE_FEE_RATE, good: false },
     {
       // "В ноль" — это не ноль. Выход стоит 2 цента на КАЖДУЮ из шар, плюс
-      // 2% комиссии, и на $5 это 30–39 центов. Называть это «безубытком»
-      // было бы самым дорогим словом в интерфейсе: 80% сделок закрываются
-      // именно так, и именно этот расход держит на себе весь перевес.
+      // комиссия за вход и за выход, и на $5 это 40 центов. Называть это
+      // «безубытком» было бы самым дорогим словом в интерфейсе: 80% сделок
+      // закрываются именно так, и именно этот расход держит перевес.
       label: "вышли по лимиту",
-      value: -shares * EXIT_SLIPPAGE - stake * TRADE_FEE_RATE,
+      value: -shares * EXIT_SLIPPAGE - feeBothWays,
       good: null,
-      note: `${(shares * EXIT_SLIPPAGE * 100).toFixed(0)}ц спред + ${(stake * TRADE_FEE_RATE * 100).toFixed(0)}ц комиссия`,
+      note: `${(shares * EXIT_SLIPPAGE * 100).toFixed(0)}ц спред + ${(feeBothWays * 100).toFixed(0)}ц комиссия`,
     },
   ];
 
