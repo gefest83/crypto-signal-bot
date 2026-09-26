@@ -53,26 +53,40 @@ const schema = defineSchema(
       symbol: v.string(),
       windowStart: v.number(),
       windowEnd: v.number(),
+      /** Polymarket market this call was priced against, e.g. btc-updown-5m-… */
+      marketSlug: v.optional(v.string()),
+      /** CLOB token id of the side that was bought. */
+      tokenId: v.optional(v.string()),
+      /** Real Polymarket bid/ask on that token at the moment of the call. */
+      entryBid: v.optional(v.number()),
+      entryAsk: v.optional(v.number()),
       direction: v.union(v.literal("up"), v.literal("down")),
-      score: v.number(),
-      confidence: v.number(),
-      effectiveConfidence: v.number(),
-      estimatedProbability: v.number(),
-      maxEntryPrice: v.number(),
+      /**
+       * Legacy candle-engine fields. Optional because the current entry rule is
+       * driven by the real Polymarket book and produces none of them; kept so
+       * historical rows stay readable.
+       */
+      score: v.optional(v.number()),
+      confidence: v.optional(v.number()),
+      effectiveConfidence: v.optional(v.number()),
+      estimatedProbability: v.optional(v.number()),
+      maxEntryPrice: v.optional(v.number()),
       /** The price cap calculated when the call was locked, if available. */
       entryLimitPrice: v.optional(v.number()),
-      referencePrice: v.number(),
-      regime: v.string(),
+      referencePrice: v.optional(v.number()),
+      regime: v.optional(v.string()),
       phaseAtSignal: v.union(
         v.literal("early"),
         v.literal("mid"),
         v.literal("late"),
       ),
-      entryDeadline: v.number(),
-      factors: v.array(signalFactorValidator),
-      notes: v.array(v.string()),
+      entryDeadline: v.optional(v.number()),
+      factors: v.optional(v.array(signalFactorValidator)),
+      notes: v.optional(v.array(v.string())),
       createdAt: v.number(),
       closePrice: v.optional(v.number()),
+      /** True when Polymarket settled the market on the UP token. */
+      upWon: v.optional(v.boolean()),
       outcome: v.optional(
         v.union(v.literal("win"), v.literal("loss"), v.literal("tie")),
       ),

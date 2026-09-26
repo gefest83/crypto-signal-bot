@@ -20,8 +20,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { api } from "@/convex/_generated/api";
-import { formatClock, formatPrice } from "@/lib/format";
-import { isMarketSymbol, SYMBOL_META } from "@/lib/market/types";
+import { formatClock } from "@/lib/format";
+import { pnlForEntry } from "@/lib/strategy/entry";
 import { cn } from "@/lib/utils";
 import { useMutation, useQuery } from "convex/react";
 import { ArrowDown, ArrowUp, Trash2 } from "lucide-react";
@@ -67,12 +67,15 @@ function OutcomeBadge({ outcome }: { outcome?: "win" | "loss" | "tie" }) {
   );
 }
 
+const money = (value: number) => `${value > 0 ? "+" : ""}${value.toFixed(2)}`;
+
 export function RoundHistory() {
   const stats = useQuery(api.signals.signalStats, {});
   const signals = useQuery(api.signals.recentSignals, { limit: 50 });
   const clearSignals = useMutation(api.signals.clearSignals);
 
   const rows = signals ?? [];
+  const real = stats?.realTrades ?? 0;
 
   return (
     <section className="surface border border-border p-5 sm:p-6">
@@ -80,9 +83,9 @@ export function RoundHistory() {
         <div>
           <h2 className="text-sm font-semibold tracking-tight">Журнал раундов</h2>
           <p className="mt-1 text-xs text-muted-foreground">
-            Каждый вызов фиксируется один раз и оценивается по реальному закрытию
-            раунда. P&L: при ставке $1 чистая прибыль равна 1 / цена контракта − 1,
-            проигрыш — −1.
+            Каждый вызов фиксируется один раз по реальному ask из стакана
+            Polymarket и оценивается по резолву самого рынка. P&amp;L: при ставке
+            $1 чистая прибыль равна 1 / цена − 1, проигрыш — −1.
           </p>
         </div>
         <AlertDialog>
@@ -118,20 +121,31 @@ export function RoundHistory() {
       <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-5">
         <div className="rounded-xl border border-border/70 bg-muted/40 px-4 py-3">
           <p className="text-[11px] tracking-wider text-muted-foreground uppercase">
-            Общий P&L
+            P&amp;L реальный
           </p>
           <p
             className={cn(
               "mt-1 font-mono text-2xl font-semibold tabular-nums",
-              (stats?.totalPnl ?? 0) >= 0 ? "text-up-ink" : "text-down-ink",
+              (stats?.realPnl ?? 0) >= 0 ? "text-up-ink" : "text-down-ink",
             )}
           >
-            {stats?.totalPnl === undefined
-              ? "—"
-              : `${stats.totalPnl > 0 ? "+" : ""}${stats.totalPnl.toFixed(2)}`}
+            {stats?.realPnl === undefined ? "—" : money(stats.realPnl)}
           </p>
           <p className="mt-1 text-[10px] text-muted-foreground">
-            $1 stake · win 1 / price − 1 · loss −1
+            {real > 0 ? `${real} сделок по стакану` : "пока нет сделок по стакану"}
+          </p>
+        </div>
+        <div className="rounded-xl border border-border/70 bg-muted/40 px-4 py-3">
+          <p className="text-[11px] tracking-wider text-muted-foreground uppercase">
+            Средняя цена
+          </p>
+          <p className="mt-1 font-mono text-2xl font-semibold tabular-nums">
+            {stats?.avgAsk === null || stats?.avgAsk === undefined
+              ? "—"
+              : stats.avgAsk.toFixed(2)}
+          </p>
+          <p className="mt-1 text-[10px] text-muted-foreground">
+            реальный ask, порог входа 0.80
           </p>
         </div>
         <div className="rounded-xl border border-border/70 bg-muted/40 px-4 py-3">
@@ -162,14 +176,6 @@ export function RoundHistory() {
             {stats?.resolved ?? 0}
           </p>
         </div>
-        <div className="rounded-xl border border-border/70 bg-muted/40 px-4 py-3">
-          <p className="text-[11px] tracking-wider text-muted-foreground uppercase">
-            Ждут оценки
-          </p>
-          <p className="mt-1 font-mono text-2xl font-semibold tabular-nums">
-            {stats?.pending ?? 0}
-          </p>
-        </div>
       </div>
 
       {stats && stats.lastResults.length > 0 ? (
@@ -198,23 +204,17 @@ export function RoundHistory() {
         <Table>
           <TableHeader>
             <TableRow className="bg-muted/40 hover:bg-muted/40">
-              <TableHead className="text-[11px] tracking-wider uppercase">
-                Раунд
-              </TableHead>
-              <TableHead className="text-[11px] tracking-wider uppercase">
-                Актив
-              </TableHead>
-              <TableHead className="text-[11px] tracking-wider uppercase">
-                Вызов
+              <TableHead className="text-[11px] tracking-wider uppercase">Раунд</TableHead>
+              <TableHead className="text-[11px] tracking-wider uppercase">Актив</TableHead>
+              <TableHead className="text-[11px] tracking-wider uppercase">Вызов</TableHead>
+              <TableHead className="text-right text-[11px] tracking-wider uppercase">
+                Ask / Bid
               </TableHead>
               <TableHead className="text-right text-[11px] tracking-wider uppercase">
-                Увер.
+                Источник
               </TableHead>
               <TableHead className="text-right text-[11px] tracking-wider uppercase">
-                Цена контракта
-              </TableHead>
-              <TableHead className="text-right text-[11px] tracking-wider uppercase">
-                Откр. → закр.
+                P&amp;L
               </TableHead>
               <TableHead className="text-right text-[11px] tracking-wider uppercase">
                 Итог
@@ -228,20 +228,26 @@ export function RoundHistory() {
                   colSpan={7}
                   className="py-8 text-center text-sm text-muted-foreground"
                 >
-                  Журнал пуст. Первый вызов запишется, как только появится перевес.
+                  Журнал пуст. Первый вызов запишется, как только Polymarket
+                  покажет фаворита дороже 0.80.
                 </TableCell>
               </TableRow>
             ) : (
               rows.map((row) => {
-                const asset = isMarketSymbol(row.symbol)
-                  ? SYMBOL_META[row.symbol].asset
-                  : row.symbol;
+                const ask = row.entryAsk ?? null;
+                const bid = row.entryBid ?? null;
+                const pnl =
+                  row.outcome && ask
+                    ? pnlForEntry(ask, row.outcome === "win")
+                    : null;
                 return (
                   <TableRow key={row._id}>
                     <TableCell className="font-mono text-xs tabular-nums text-muted-foreground">
                       {formatClock(row.windowStart)} UTC
                     </TableCell>
-                    <TableCell className="text-xs font-medium">{asset}</TableCell>
+                    <TableCell className="text-xs font-medium">
+                      {row.symbol === "ETHUSDT" ? "ETH" : "BTC"}
+                    </TableCell>
                     <TableCell>
                       <span
                         className={cn(
@@ -258,17 +264,22 @@ export function RoundHistory() {
                       </span>
                     </TableCell>
                     <TableCell className="text-right font-mono text-xs tabular-nums">
-                      {row.confidence}%
+                      {ask === null ? "—" : `${ask.toFixed(2)} / ${bid?.toFixed(2) ?? "—"}`}
+                    </TableCell>
+                    <TableCell className="text-right text-[11px] text-muted-foreground">
+                      {ask === null ? "оценка" : "стакан"}
                     </TableCell>
                     <TableCell
-                      className="text-right font-mono text-xs tabular-nums"
-                      title="Лимит цены контракта, рассчитанный при фиксации сигнала"
+                      className={cn(
+                        "text-right font-mono text-xs tabular-nums",
+                        pnl === null
+                          ? "text-muted-foreground"
+                          : pnl >= 0
+                            ? "text-up-ink"
+                            : "text-down-ink",
+                      )}
                     >
-                      {(row.entryLimitPrice ?? row.maxEntryPrice).toFixed(2)}
-                    </TableCell>
-                    <TableCell className="text-right font-mono text-xs tabular-nums text-muted-foreground">
-                      {formatPrice(row.referencePrice)}
-                      {row.closePrice ? ` → ${formatPrice(row.closePrice)}` : ""}
+                      {pnl === null ? "—" : money(pnl)}
                     </TableCell>
                     <TableCell className="text-right">
                       <OutcomeBadge outcome={row.outcome} />

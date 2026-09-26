@@ -1,25 +1,19 @@
 /**
- * "Early Push" signal engine for Binance 5-minute Up/Down prediction rounds.
+ * Binance candle engine for the 5-minute Up/Down rounds.
  *
- * Every prediction-market contract behaves the same way: the price climbs
- * toward 1.00 as soon as the underlying starts moving, so the edge lives in the
- * first part of the round. The engine answers one question, and it deliberately
- * does not answer it in the first seconds:
+ * NOTE ON ITS ROLE: this is no longer the thing that decides a trade. Measured
+ * against real Polymarket prices over 15 days, this engine's calls graded 75.5%
+ * while the market charged 0.745 for them — break-even, not an edge. The price
+ * of a prediction contract already contains the signal this engine extracts
+ * from spot, so guessing direction cannot pay for itself.
  *
- *     "Now that the round's opening minute has closed, is there enough
- *      evidence to call this round Up or Down?"
+ * It survives as a second, independent opinion. The entry rule
+ * (`src/lib/strategy/entry.ts`) only takes a trade when this engine does not
+ * contradict the side the market favours, and everything it produces here is
+ * optional context in the journal.
  *
- * Calling inside that opening minute was the single biggest source of losses:
- * a backtest over real Binance data showed entries taken in the first ten
- * seconds grading around 64%, while the same rounds called once the opening
- * minute had printed graded around 73%. So `prepare` is a real phase — the
- * engine refuses to call until t = 60s, and then votes with six independent
- * 1-minute factors, filtered by guards (exhaustion, volatility regime,
- * cushion from the round open, higher-timeframe trend) and decayed by how much
- * of the round has already elapsed. Standing aside is a valid, expected answer.
- *
- * Everything here is pure: same candles + same price => same signal. That makes
- * the strategy testable and keeps the React layer free of trading logic.
+ * Everything here is still pure: same candles + same price => same signal, so
+ * it stays testable and keeps trading logic out of the React layer.
  */
 
 import type { Candle, MarketSymbol } from "@/lib/market/types";

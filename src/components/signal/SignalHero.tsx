@@ -1,5 +1,6 @@
 import { Badge } from "@/components/ui/badge";
 import type { RoundStatus } from "@/hooks/use-signal-console";
+import type { PmAsset, PmRound } from "@/convex/polymarket";
 import {
   formatClock,
   formatClockWithSeconds,
@@ -8,16 +9,13 @@ import {
   formatSignedPct,
 } from "@/lib/format";
 import type { FeedStatus } from "@/lib/market/binance";
-import { SYMBOL_META, type MarketSymbol } from "@/lib/market/types";
+import type { SignalReadout } from "@/lib/strategy/engine";
 import {
-  ENTRY_CUTOFF_MS,
-  ENTRY_WINDOW_MS,
-  MIN_CONFIDENCE,
-  MIN_ENTRY_ELAPSED_MS,
-  MIN_SCORE,
-  type Phase,
-  type SignalReadout,
-} from "@/lib/strategy/engine";
+  ENTRY_END_MS,
+  ENTRY_START_MS,
+  FAVORITE_MIN_ASK,
+  type EntryReadout,
+} from "@/lib/strategy/entry";
 import { cn } from "@/lib/utils";
 import { motion } from "framer-motion";
 import {
@@ -30,11 +28,13 @@ import {
 } from "lucide-react";
 
 type SignalHeroProps = {
-  symbol: MarketSymbol;
+  asset: PmAsset;
   status: RoundStatus;
-  readout: SignalReadout | null;
-  locked: SignalReadout | null;
-  price: number | undefined;
+  entry: EntryReadout | null;
+  lock: EntryReadout | null;
+  round: PmRound | null;
+  engine: SignalReadout | null;
+  spot: number | undefined;
   now: number;
   windowStart: number;
   windowEnd: number;
@@ -44,11 +44,9 @@ type SignalHeroProps = {
 
 type Tone = "up" | "down" | "neutral";
 
-const PHASE_LABEL: Record<Phase, string> = {
-  prepare: "ЖДЁМ 1-Ю МИНУТУ",
-  early: "ОКНО ПОДТВЕРЖДЕНИЯ",
-  mid: "ВХОД УХОДИТ",
-  late: "НАБЛЮДЕНИЕ",
+const ASSET_LABEL: Record<PmAsset, { asset: string; name: string }> = {
+  btc: { asset: "BTC", name: "Bitcoin" },
+  eth: { asset: "ETH", name: "Ethereum" },
 };
 
 const CARD_TONE: Record<Tone, string> = {
@@ -57,13 +55,7 @@ const CARD_TONE: Record<Tone, string> = {
   neutral: "border-warn/25 bg-[linear-gradient(145deg,var(--warn-soft),transparent_62%)]",
 };
 
-function FeedPill({
-  status,
-  detail,
-}: {
-  status: FeedStatus;
-  detail: string;
-}) {
+function FeedPill({ status, detail }: { status: FeedStatus; detail: string }) {
   const tone =
     status === "live"
       ? "text-up-ink"
@@ -74,7 +66,7 @@ function FeedPill({
           : "text-muted-foreground";
   const label =
     status === "live"
-      ? "Поток Binance"
+      ? "Котировки Binance"
       : status === "degraded"
         ? "REST-режим"
         : status === "offline"
@@ -126,31 +118,18 @@ function Metric({
   );
 }
 
-function EntryWindow({
-  windowStart,
-  now,
-  phase,
-}: {
-  windowStart: number;
-  now: number;
-  phase: Phase;
-}) {
+function EntryWindow({ windowStart, now }: { windowStart: number; now: number }) {
   const elapsed = Math.max(0, now - windowStart);
-  const waiting = phase === "prepare";
-  const over = phase !== "early" && !waiting;
-  const opensAt = windowStart + MIN_ENTRY_ELAPSED_MS;
-  const span = Math.max(1, ENTRY_WINDOW_MS - MIN_ENTRY_ELAPSED_MS);
-  const pct = Math.max(
-    0,
-    Math.min(100, ((elapsed - MIN_ENTRY_ELAPSED_MS) / span) * 100),
-  );
-  const left = Math.max(0, ENTRY_WINDOW_MS - elapsed);
+  const waiting = elapsed < ENTRY_START_MS;
+  const over = elapsed >= ENTRY_END_MS;
+  const span = Math.max(1, ENTRY_END_MS - ENTRY_START_MS);
+  const pct = Math.max(0, Math.min(100, ((elapsed - ENTRY_START_MS) / span) * 100));
 
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-baseline justify-between gap-3">
         <span className="text-[11px] font-medium tracking-wider text-muted-foreground uppercase">
-          Окно подтверждения
+          Окно входа
         </span>
         <span
           className={cn(
@@ -159,33 +138,29 @@ function EntryWindow({
           )}
         >
           {waiting
-            ? `открытие через ${formatCountdown(Math.max(0, opensAt - now))}`
+            ? `открытие через ${formatCountdown(Math.max(0, windowStart + ENTRY_START_MS - now))}`
             : over
               ? "закрыто"
-              : `осталось ${formatCountdown(left)}`}
+              : `осталось ${formatCountdown(Math.max(0, windowStart + ENTRY_END_MS - now))}`}
         </span>
       </div>
       <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
         <div
           className={cn(
             "h-full rounded-full transition-[width] duration-1000 ease-linear",
-            waiting ? "bg-warn" : over ? "bg-warn" : "bg-primary",
+            waiting || over ? "bg-warn" : "bg-primary",
           )}
           style={{ width: `${waiting ? 0 : over ? 100 : pct}%` }}
         />
       </div>
       <p className="text-xs leading-relaxed text-muted-foreground">
-        {phase === "prepare"
+        {waiting
           ? `Идёт первая минута раунда. До ${Math.round(
-              MIN_ENTRY_ELAPSED_MS / 1000,
-            )}-й секунды движок видит только шум тиков, поэтому не делает вызов: вход возможен, только когда первая минута закроется.`
-          : phase === "early"
-            ? "Первая минута закрыта, контракт ещё не переоценён — это окно и есть весь перевес стратегии."
-            : phase === "mid"
-              ? `Поздний вход: шансы контракта уже выросли. Вход закроется через ${formatCountdown(
-                  Math.max(0, ENTRY_CUTOFF_MS - elapsed),
-                )}.`
-              : "Вход закрыт: цена контракта уже отражает движение. Ждём следующий раунд."}
+              ENTRY_START_MS / 1000,
+            )}-й секунды в стакане только тики — вход возможен только после её закрытия.`
+          : over
+            ? "Вход закрыт: контракт уже отражает движение. Ждём следующий раунд."
+            : "Первая минута закрыта — смотрим реальный стакан и входим только в явного фаворита."}
       </p>
     </div>
   );
@@ -208,79 +183,69 @@ function DirectionGlyph({ direction }: { direction: Tone }) {
 }
 
 export function SignalHero({
-  symbol,
+  asset,
   status,
-  readout,
-  locked,
-  price,
+  entry,
+  lock,
+  round,
+  engine,
+  spot,
   now,
   windowStart,
   windowEnd,
   feedStatus,
   feedDetail,
 }: SignalHeroProps) {
-  const meta = SYMBOL_META[symbol];
-  const call = locked;
-  const warming = !readout;
+  const meta = ASSET_LABEL[asset];
+  const call = lock;
+  const warming = !entry;
   const showCall = Boolean(call);
   const skipped = !call && !warming && status === "closed";
-  const phase: Phase = (call ?? readout)?.phase ?? "early";
-  // Before the opening minute closes there is nothing to lean on: showing a
-  // direction here would imply an edge the engine deliberately refuses to claim.
-  const preparing = !warming && !showCall && phase === "prepare";
-  const leaning: Tone = readout ? (readout.score >= 0 ? "up" : "down") : "neutral";
+
   const direction: Tone = showCall
-    ? (call!.direction as Tone)
-    : skipped || preparing
+    ? ((call!.direction as "up" | "down") as Tone)
+    : skipped || warming
       ? "neutral"
-      : leaning;
-  const tone: Tone = skipped || preparing ? "neutral" : direction;
+      : entry?.favourite === "down"
+        ? "down"
+        : entry?.favourite === "up"
+          ? "up"
+          : "neutral";
+  const tone: Tone = skipped ? "neutral" : direction;
   const nextRound = Math.max(0, windowEnd - now);
-  const shownConfidence = call
-    ? call.effectiveConfidence
-    : readout
-      ? readout.effectiveConfidence
-      : null;
+  const ask = call?.ask ?? entry?.ask ?? null;
+  const bid = call?.bid ?? entry?.bid ?? null;
+  const spread = ask !== null && bid !== null ? Math.round((ask - bid) * 100) / 100 : null;
 
   const headline = warming
-    ? "Загружаю свечи"
+    ? "—"
     : showCall
       ? direction === "up"
         ? "UP"
         : "DOWN"
-      : preparing
-        ? "ЖДЁМ"
-        : skipped
-          ? "СКИП"
-          : "—";
+      : skipped
+        ? "СКИП"
+        : entry?.eligible
+          ? "ГОТОВ"
+          : "ЖДЁМ";
 
   const title = warming
-    ? "Считаю рынок"
+    ? "Загружаю рынок Polymarket"
     : showCall
       ? direction === "up"
-        ? "Прогноз роста на 5 минут"
-        : "Прогноз падения на 5 минут"
-      : preparing
-        ? "Идёт первая минута раунда"
-        : skipped
-          ? "Раунд пропущен осознанно"
-          : `Сканирую раунд — склонность ${leaning === "up" ? "вверх" : "вниз"}`;
+        ? "Покупка UP по реальному ask"
+        : "Покупка DOWN по реальному ask"
+      : skipped
+        ? "Раунд пропущен осознанно"
+        : `Фаворит рынка: ${entry?.favourite ? entry.favourite.toUpperCase() : "—"}`;
 
   const subtitle = warming
     ? "Первый расчёт появится через пару секунд."
     : showCall
-      ? `Вызов зафиксирован в ${formatClockWithSeconds(
-          call!.evaluatedAt,
-        )} UTC и не меняется до конца раунда.`
-      : preparing
-        ? `Вызов станет возможен в ${formatClockWithSeconds(
-            readout!.entryOpensAt,
-          )} UTC — сразу после закрытия первой минуты раунда.`
-        : skipped
-          ? `Перевес ниже порога — отсутствие сделки тоже позиция. Следующий раунд через ${formatCountdown(
-              nextRound,
-            )}.`
-          : `Перевес ${readout!.score.toFixed(2)} из порога ${MIN_SCORE.toFixed(2)} — ждём подтверждения факторами.`;
+      ? `Вызов зафиксирован по настоящей цене ${ask?.toFixed(2)} и не меняется до конца раунда.`
+      : skipped
+        ? `Перевеса не было. Следующий раунд через ${formatCountdown(nextRound)}.`
+        : entry?.reason;
 
   return (
     <section className={cn("surface border", CARD_TONE[tone])}>
@@ -299,14 +264,12 @@ export function SignalHero({
             variant="outline"
             className={cn(
               "rounded-full border px-2.5 py-0.5 text-[10px] font-semibold tracking-wider",
-              phase === "early"
+              showCall
                 ? "border-up/30 bg-up-soft text-up-ink"
-                : phase === "mid"
-                  ? "border-warn/40 bg-warn-soft text-warn-ink"
-                  : "border-border bg-muted text-muted-foreground",
+                : "border-border bg-muted text-muted-foreground",
             )}
           >
-            {PHASE_LABEL[phase]}
+            {showCall ? "ВЫЗОВ ЗАФИКСИРОВАН" : "Polymarket · реальная цена"}
           </Badge>
         </div>
       </div>
@@ -319,16 +282,14 @@ export function SignalHero({
                 <Loader2 className="size-7 animate-spin text-muted-foreground" />
               </span>
               <div>
-                <p className="text-2xl font-semibold tracking-tight sm:text-3xl">
-                  {title}
-                </p>
+                <p className="text-2xl font-semibold tracking-tight sm:text-3xl">{title}</p>
                 <p className="mt-1.5 text-sm text-muted-foreground">{subtitle}</p>
               </div>
             </div>
           ) : (
             <>
               <motion.div
-                key={`${symbol}-${showCall ? call?.windowStart : "scan"}-${direction}`}
+                key={`${asset}-${showCall ? call?.start : "scan"}-${direction}`}
                 initial={{ opacity: 0, scale: 0.97 }}
                 animate={{ opacity: 1, scale: 1 }}
                 transition={{ duration: 0.35, ease: "easeOut" }}
@@ -364,19 +325,20 @@ export function SignalHero({
                 </div>
               </motion.div>
 
-              <EntryWindow windowStart={windowStart} now={now} phase={phase} />
+              <EntryWindow windowStart={windowStart} now={now} />
 
-              <ul className="flex flex-col gap-1.5 border-t border-border/60 pt-4">
-                {(call?.notes ?? readout!.notes).map((note) => (
-                  <li
-                    key={note}
-                    className="flex gap-2 text-xs leading-relaxed text-muted-foreground"
-                  >
+              {entry ? (
+                <ul className="flex flex-col gap-1.5 border-t border-border/60 pt-4">
+                  <li className="flex gap-2 text-xs leading-relaxed text-muted-foreground">
                     <span className="mt-1.5 size-1 shrink-0 rounded-full bg-muted-foreground/50" />
-                    {note}
+                    {round?.title ?? "Рынок 5 минут Up/Down"}
                   </li>
-                ))}
-              </ul>
+                  <li className="flex gap-2 text-xs leading-relaxed text-muted-foreground">
+                    <span className="mt-1.5 size-1 shrink-0 rounded-full bg-muted-foreground/50" />
+                    {entry.reason}
+                  </li>
+                </ul>
+              ) : null}
             </>
           )}
         </div>
@@ -385,36 +347,45 @@ export function SignalHero({
           <div>
             <div className="flex items-baseline justify-between">
               <span className="text-[11px] font-medium tracking-wider text-muted-foreground uppercase">
-                Уверенность
+                Реальный ask
               </span>
-              {call && call.confidence !== call.effectiveConfidence ? (
-                <span className="font-mono text-[11px] text-warn-ink">
-                  до затухания {call.confidence}%
+              {spread !== null ? (
+                <span className="font-mono text-[11px] text-muted-foreground">
+                  спред {spread.toFixed(2)}
                 </span>
               ) : null}
             </div>
+            {round && round.priceSource !== "book" ? (
+              <p
+                className={cn(
+                  "mt-1 text-[11px]",
+                  round.priceSource === "stale" ? "text-warn-ink" : "text-muted-foreground",
+                )}
+              >
+                {round.priceSource === "stale"
+                  ? "Стакан пуст — цена отстаёт, вход не публикуется"
+                  : "Нет котировок"}
+              </p>
+            ) : null}
             <div className="mt-1 flex items-end gap-2">
               <span className="font-mono text-5xl leading-none font-semibold tabular-nums sm:text-6xl">
-                {shownConfidence === null ? "—" : shownConfidence}
-                <span className="text-2xl sm:text-3xl">%</span>
+                {ask === null ? "—" : ask.toFixed(2)}
               </span>
-              {!showCall && readout ? (
-                <span className="pb-1 font-mono text-[11px] text-warn-ink">
-                  порог {MIN_CONFIDENCE}%
-                </span>
-              ) : null}
+              <span className="pb-1 font-mono text-[11px] text-muted-foreground">
+                порог {FAVORITE_MIN_ASK.toFixed(2)} · из стакана
+              </span>
             </div>
             <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-muted">
               <div
                 className={cn(
                   "h-full rounded-full transition-[width] duration-500",
-                  direction === "up"
-                    ? "bg-up"
-                    : direction === "down"
-                      ? "bg-down"
+                  ask === null
+                    ? "bg-muted-foreground/40"
+                    : ask >= FAVORITE_MIN_ASK
+                      ? "bg-up"
                       : "bg-muted-foreground/40",
                 )}
-                style={{ width: `${shownConfidence ?? 0}%` }}
+                style={{ width: `${ask === null ? 0 : ask * 100}%` }}
               />
             </div>
           </div>
@@ -423,47 +394,50 @@ export function SignalHero({
             <ShieldAlert className="size-4 shrink-0 text-muted-foreground" />
             <div className="min-w-0">
               <p className="text-[11px] font-medium tracking-wider text-muted-foreground uppercase">
-                Макс. цена входа · только early
+                Цена из стакана Polymarket
               </p>
               <p className="font-mono text-lg tabular-nums">
-                {call ? call.maxEntryPrice.toFixed(2) : "—"}
-                {call ? (
-                  <span className="ms-2 text-xs text-muted-foreground">
-                    оценка вероятности {Math.round(call.estimatedProbability * 100)}% − 6 п.п. · фактический ask не подключён
-                  </span>
-                ) : null}
+                {bid === null ? "—" : `${bid.toFixed(2)} / ${ask?.toFixed(2) ?? "—"}`}
+                <span className="ms-2 text-xs text-muted-foreground">
+                  {call
+                    ? `зафиксировано в ${formatClockWithSeconds(call.checkedAt)} UTC`
+                    : "котировка обновляется каждые 5 секунд"}
+                </span>
               </p>
             </div>
           </div>
 
           <div className="grid grid-cols-2 gap-x-4 gap-y-3">
-            <Metric label="Цена сейчас" value={formatPrice(price ?? readout?.price)} />
-            <Metric
-              label="Открытие раунда"
-              value={formatPrice(readout?.referencePrice)}
-            />
+            <Metric label="Спот сейчас" value={formatPrice(spot ?? engine?.price)} />
             <Metric
               label="Отрыв раунда"
-              value={readout ? formatSignedPct(readout.roundPnlPct) : "—"}
+              value={engine ? formatSignedPct(engine.roundPnlPct) : "—"}
+              tone={engine ? (engine.roundPnlPct >= 0 ? "up" : "down") : "default"}
+            />
+            <Metric
+              label="Свечной движок"
+              value={engine ? engine.direction.toUpperCase() : "—"}
               tone={
-                readout ? (readout.roundPnlPct >= 0 ? "up" : "down") : "default"
+                engine
+                  ? engine.direction === "up"
+                    ? "up"
+                    : engine.direction === "down"
+                      ? "down"
+                      : "default"
+                  : "default"
               }
             />
             <Metric
               label="RSI(14) · ATR"
-              value={
-                readout
-                  ? `${readout.rsi.toFixed(0)} · ${(readout.atrPct * 100).toFixed(2)}%`
-                  : "—"
-              }
+              value={engine ? `${engine.rsi.toFixed(0)} · ${(engine.atrPct * 100).toFixed(2)}%` : "—"}
             />
           </div>
 
           <div className="flex items-center gap-2 border-t border-border/60 pt-3 text-[11px] text-muted-foreground">
             <Radio className="size-3.5 shrink-0" />
             {showCall
-              ? "Вызов записан в журнал и будет оценён по закрытию раунда"
-              : "Движок пересчитывает перевес каждую секунду"}
+              ? "Вызов записан в журнал по реальной цене и будет оценён резолвом Polymarket"
+              : "Сткан перечитывается каждые 5 секунд"}
           </div>
         </div>
       </div>
