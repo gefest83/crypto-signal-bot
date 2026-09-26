@@ -3,13 +3,16 @@ import { MakerEdge } from "@/components/maker/MakerEdge";
 import { MakerJournal } from "@/components/maker/MakerJournal";
 import { MakerRound } from "@/components/maker/MakerRound";
 import { MakerRules } from "@/components/maker/MakerRules";
+import { PaperPanel } from "@/components/maker/PaperPanel";
 import { Button } from "@/components/ui/button";
 import type { PmAsset } from "../convex/polymarket";
 import { useAuth } from "@/hooks/use-auth";
 import { useMakerSession, type MakerSession } from "@/hooks/use-maker-session";
+import { usePaperSession } from "@/hooks/use-paper-session";
+import { DEFAULT_PAPER } from "@/lib/strategy/paper";
 import {
   DEFAULT_LIMIT,
-  MIN_STAKE_USD,
+  MIN_ORDER_SHARES,
   STAKE_OPTIONS_USD,
   stakeOutcomes,
   type StakeUsd,
@@ -36,9 +39,10 @@ const PHASE_HINT: Record<string, string> = {
  * Order size, in real USDC.
  *
  * Polymarket sells dollars, not shares, and the smallest order the books take
- * is $1. At the 0.50 limit that is 2 shares, so a $1 stake is not a small bet
- * — it is the full $1 at risk if the round goes against us, and it is the
- * number every P&L on this screen is measured against.
+ * is 5 SHARES, not dollars — at the 0.50 limit that is $2.50, so the options
+ * start at $5. A $1 stake was never executable, and the risk on a real order
+ * is the full stake plus 2%, which is the number every P&L here is measured
+ * against.
  */
 function StakeSwitch({
   stake,
@@ -71,8 +75,10 @@ function StakeSwitch({
         {outcomes.won.toFixed(2)} $ выигрыш · {outcomes.lost.toFixed(2)} $ проигрыш ·{" "}
         {outcomes.exited.toFixed(2)} $ выход
       </span>
-      {stake === MIN_STAKE_USD && (
-        <span className="text-[10px] text-muted-foreground/70">минимальный размер заявки</span>
+      {stake === STAKE_OPTIONS_USD[0] && (
+        <span className="text-[10px] text-muted-foreground/70">
+          минимум биржи — {MIN_ORDER_SHARES} шар
+        </span>
       )}
     </div>
   );
@@ -125,8 +131,9 @@ export default function Dashboard() {
   const { user, signOut } = useAuth();
   const navigate = useNavigate();
   const [asset, setAsset] = useState<PmAsset>("btc");
-  const [stake, setStake] = useState<StakeUsd>(MIN_STAKE_USD);
+  const [stake, setStake] = useState<StakeUsd>(5);
   const maker = useMakerSession(DEFAULT_LIMIT, stake);
+  const paper = usePaperSession(DEFAULT_LIMIT, stake, DEFAULT_PAPER);
 
   const handleSignOut = async () => {
     await signOut();
@@ -177,6 +184,15 @@ export default function Dashboard() {
           <MakerEdge stake={stake} />
           <MakerRules />
         </div>
+
+        <PaperPanel
+          sessions={paper.sessions}
+          journal={paper.journal}
+          totals={paper.totals}
+          now={paper.now}
+          end={paper.end}
+          penetrationTicks={paper.settings.penetrationTicks}
+        />
 
         <MakerJournal log={maker.log} />
 

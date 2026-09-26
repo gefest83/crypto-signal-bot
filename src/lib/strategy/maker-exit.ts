@@ -66,19 +66,23 @@ export const EXIT_SLIPPAGE = 0.02;
 export const TRADE_FEE_RATE = 0.02;
 
 /**
- * Polymarket does not sell shares — it sells USDC. A $1 order at a 0.35 limit
- * buys 1 / 0.35 = 2.86 shares, pays out 2.86 if the round goes our way, and
- * risks the full $1 if it does not.
+ * Polymarket does not sell shares — it sells USDC, and the exchange enforces a
+ * minimum measured in SHARES, not dollars.
  *
- * This is the single most important accounting fact on these markets, and
- * getting it wrong is what made an earlier version of this screen look like it
- * risked 35¢ when it actually risked a dollar. $1 is the smallest order the
- * books accept; $5 and $10 are the sizes the UI offers above it.
+ * The live book says `min_order_size: 5`. At the 0.50 limit that is 5 shares,
+ * so the smallest real order is $2.50 and the real risk on a trade is $2.55
+ * after commission — not the $1 this screen used to advertise. Every order
+ * below that is rejected outright, so a $1 strategy would never have executed
+ * a single trade.
+ *
+ * This was found by reading the exchange, after the backtest had already been
+ * built and believed. The band starts at 5 shares for exactly that reason.
  */
-export const MIN_STAKE_USD = 1;
-export const STAKE_OPTIONS_USD = [1, 5, 10] as const;
+export const MIN_ORDER_SHARES = 5;
+export const MIN_STAKE_USD = 2.5;
+export const STAKE_OPTIONS_USD = [5, 10, 25] as const;
 export type StakeUsd = (typeof STAKE_OPTIONS_USD)[number];
-export const DEFAULT_STAKE_USD: StakeUsd = 1;
+export const DEFAULT_STAKE_USD: StakeUsd = 5;
 
 /**
  * The market this strategy runs on.
@@ -203,10 +207,10 @@ export function makerPnl(limit: number, won: boolean, exited: boolean): number {
 /**
  * P&L in USDC on a real order of `stake` dollars, filled at `limit`.
  *
- * A $1 stake at 0.35 is 2.86 shares, so the outcomes are:
- *   won and held   +$1.84   (2.86 shares pay out 2.86 against a $1 cost, less 2¢ fee)
- *   lost and held  −$1.02   (the whole stake plus 2% commission)
- *   exited         −$0.08   (sold back 2 cents under the limit, plus 2% commission)
+ * A $5 stake at 0.50 is 10 shares, so the outcomes are:
+ *   won and held   +$4.90    (10 shares pay out 10 against a $5 cost, less 10¢ fee)
+ *   lost and held  −$5.10    (the whole stake plus 2% commission)
+ *   exited         −$0.30    (2c of slippage on 10 shares, plus 10¢ of commission)
  *
  * The risk on a trade is the full stake, not the limit — which is the number
  * that has to govern position sizing, and the reason the loss side of this

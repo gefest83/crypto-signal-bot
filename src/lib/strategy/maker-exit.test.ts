@@ -5,6 +5,7 @@ import {
   EXIT_SLIPPAGE,
   LIMIT_MAX,
   LIMIT_MIN,
+  MIN_ORDER_SHARES,
   MIN_STAKE_USD,
   MARKET_INTERVAL_MIN,
   STAKE_OPTIONS_USD,
@@ -41,63 +42,70 @@ describe("рабочий диапазон лимита", () => {
 });
 
 describe("размер заявки в долларах, а не в шарах", () => {
-  it("минимальный размер заявки — $1, и он же по умолчанию", () => {
-    expect(MIN_STAKE_USD).toBe(1);
-    expect(DEFAULT_STAKE_USD).toBe(1);
-    expect(STAKE_OPTIONS_USD[0]).toBe(1);
+  it("минимальный размер заявки биржи — 5 шар, а не $1", () => {
+    // `min_order_size` в живом стакане считается в шарах. На лимите 0.50
+    // это $2.50 стейка. Заявка на $1 была бы отклонена целиком, то есть
+    // стратегия в том виде, в каком её считали, не исполнилась бы ни разу.
+    expect(MIN_ORDER_SHARES).toBe(5);
+    expect(MIN_STAKE_USD).toBeCloseTo(2.5, 10);
+    expect(DEFAULT_STAKE_USD).toBe(5);
+    expect(STAKE_OPTIONS_USD[0]).toBe(5);
   });
 
-  it("$1 по лимиту 0.35 — это 2.86 шары, а не одна", () => {
-    // Главная ошибка учёта: раньше юнитом считалась одна шара за 35 центов,
-    // хотя Polymarket продаёт доллары и рискует весь стейк.
-    expect(sharesForStake(1, 0.35)).toBeCloseTo(1 / 0.35, 10);
+  it("ни один предложенный размер не меньше биржевого минимума", () => {
+    for (const option of STAKE_OPTIONS_USD) {
+      expect(sharesForStake(option, DEFAULT_LIMIT)).toBeGreaterThanOrEqual(MIN_ORDER_SHARES);
+    }
+  });
+
+  it("$5 по лимиту 0.50 — это 10 шар", () => {
+    expect(sharesForStake(5, 0.5)).toBeCloseTo(10, 10);
   });
 
   it("проигрыш стоит полный стейк плюс комиссия 2%", () => {
-    // 2.86 шары × (−0.35) = −1.00, и сверху 2% от $1 = −0.02. Итого −1.02.
-    // Раньше здесь стоял ребейт, и экран показывал −0.99 на сделке, которая
-    // на самом деле стоит доллар два.
-    expect(stakePnl(1, 0.35, false, false)).toBeCloseTo(-1.02, 10);
+    // 10 шар × (−0.50) = −5.00, и сверху 2% от $5 = −0.10. Итого −5.10.
+    expect(stakePnl(5, 0.5, false, false)).toBeCloseTo(-5.1, 10);
   });
 
   it("выигрыш тоже платит комиссию — она не возвращается при победе", () => {
-    // 2.86 шары × 0.65 = +1.857, минус 2% от $1.
-    expect(stakePnl(1, 0.35, true, false)).toBeCloseTo(1.857142857 - 0.02, 6);
+    // 10 шар × 0.50 = +5.00, минус 2% от $5.
+    expect(stakePnl(5, 0.5, true, false)).toBeCloseTo(5 - 0.1, 10);
   });
 
   it("выход в ноль стоит проскальзывания и комиссии вместе", () => {
-    // 2.86 шары × (0.02 проскальзывание + 0.007 комиссия) = −7.7¢
-    expect(stakePnl(1, 0.35, false, true)).toBeCloseTo(-0.077142857, 8);
+    // 10 шар × 0.02 проскальзывание = $0.20, плюс 2% от $5 = $0.10. Итого $0.30.
+    expect(stakePnl(5, 0.5, false, true)).toBeCloseTo(-0.3, 10);
   });
 
   it("комиссия считается от стейка, а не от шар", () => {
-    // 2% от цены покупки одной шары = 0.7 цента на шар.
-    expect(feePerShare(0.35)).toBeCloseTo(0.007, 10);
+    // 2% от цены покупки одной шары = 1 цент на шар при лимите 0.50.
+    expect(feePerShare(0.5)).toBeCloseTo(0.01, 10);
   });
 
-  it("масштабируется линейно: $5 и $10 — ровно в 5 и 10 раз", () => {
+  it("масштабируется линейно: $10 и $25 — ровно в 2 и 5 раз от $5", () => {
     for (const won of [true, false]) {
       for (const exited of [true, false]) {
-        expect(stakePnl(5, 0.35, won, exited)).toBeCloseTo(5 * stakePnl(1, 0.35, won, exited), 10);
-        expect(stakePnl(10, 0.35, won, exited)).toBeCloseTo(10 * stakePnl(1, 0.35, won, exited), 10);
+        expect(stakePnl(10, 0.5, won, exited)).toBeCloseTo(2 * stakePnl(5, 0.5, won, exited), 10);
+        expect(stakePnl(25, 0.5, won, exited)).toBeCloseTo(5 * stakePnl(5, 0.5, won, exited), 10);
       }
     }
   });
 
   it("риск на сделку — это стейк плюс комиссия, и он известен заранее", () => {
-    const outcomes = stakeOutcomes(10, 0.35);
-    // $10 стейка проигрывается целиком плюс 2% = −10.20. Хуже не бывает.
-    expect(outcomes.lost).toBeCloseTo(-10.2, 8);
+    const outcomes = stakeOutcomes(25, 0.5);
+    // $25 проигрывается целиком плюс 2% = −25.50. Хуже не бывает.
+    expect(outcomes.lost).toBeCloseTo(-25.5, 8);
     expect(outcomes.won).toBeGreaterThan(0);
     // Выход всегда дешевле проигрыша.
     expect(outcomes.exited).toBeGreaterThan(outcomes.lost);
   });
 
-  it("измеренный плюс переносится на $1 стейк и остаётся плюсом", () => {
-    // 0.020 × 2.857 шары = +5.7¢, минус 2¢ комиссии = +3.7¢ на $1 стейк.
-    // Это ровно та цифра, которую дал walk-forward с комиссией: +0.013 на шару.
-    const perStake = expectedPnlPerStake(1, 0.35);
-    expect(perStake).toBeCloseTo(0.02 / 0.35 - 0.02, 10);
+  it("измеренный плюс переносится на $5 стейк и остаётся плюсом", () => {
+    // $5 при лимите 0.50 — это 10 шар. 0.020 × 10 = +$0.20, минус 2% от $5
+    // = −$0.10. Итого +$0.10 на сделку, то есть +2% от стейка.
+    const perStake = expectedPnlPerStake(5, 0.5);
+    expect(perStake).toBeCloseTo(0.02 * sharesForStake(5, 0.5) - 0.1, 10);
+    expect(perStake).toBeCloseTo(0.1, 10);
     expect(perStake).toBeGreaterThan(0);
   });
 });
