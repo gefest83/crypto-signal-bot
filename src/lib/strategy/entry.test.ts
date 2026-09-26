@@ -115,6 +115,19 @@ describe("подтверждение свечным движком", () => {
   });
 });
 
+describe("торгуемость котировки", () => {
+  it("не входит по отставшей котировке", () => {
+    const readout = evaluateEntry({ ...upFavourite, tradable: false });
+    expect(readout.eligible).toBe(false);
+    expect(readout.reason).toContain("Стакан пуст");
+  });
+
+  it("входит, когда котировка из стакана", () => {
+    const readout = evaluateEntry({ ...upFavourite, tradable: true });
+    expect(readout.eligible).toBe(true);
+  });
+});
+
 describe("P&L по реальной цене", () => {
   it("выигрыш платит 1/цена − 1", () => {
     expect(pnlForEntry(0.5, true)).toBeCloseTo(1);

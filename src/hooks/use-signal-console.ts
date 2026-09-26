@@ -127,6 +127,8 @@ export function useSignalConsole(): SignalConsole {
         downAsk: round?.downAsk ?? null,
         downBid: round?.downBid ?? null,
         confirm: confirmations[asset] ?? null,
+        // Only a live book may produce a call; the event snapshot is stale.
+        tradable: round?.priceSource === "book",
       });
     }
     return map;

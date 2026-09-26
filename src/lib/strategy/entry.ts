@@ -72,6 +72,12 @@ type EvaluateInput = {
    * independent reads pointing opposite ways is the one case worth skipping.
    */
   confirm?: Direction | null;
+  /**
+   * Whether the quote came from the live order book. Polymarket's event
+   * snapshot trails the real book by cents, so a call priced off a stale quote
+   * would advertise an entry nobody can fill — those rounds are skipped.
+   */
+  tradable?: boolean;
   /** Skip the confirmation requirement (used for the unbiased baseline). */
   requireConfirmation?: boolean;
 };
@@ -84,6 +90,7 @@ export function evaluateEntry({
   downAsk,
   downBid,
   confirm = null,
+  tradable = true,
   requireConfirmation = true,
 }: EvaluateInput): EntryReadout {
   const end = start + ROUND_MS;
@@ -112,6 +119,15 @@ export function evaluateEntry({
       ...base,
       direction: "stand-aside",
       reason: "Окно входа закрыто — контракт уже переоценён.",
+    };
+  }
+
+  if (!tradable) {
+    return {
+      ...base,
+      direction: "stand-aside",
+      reason:
+        "Стакан пуст — котировка Polymarket отстала от него на центы. Вход не публикуем: цена должна быть торгуемой.",
     };
   }
 
