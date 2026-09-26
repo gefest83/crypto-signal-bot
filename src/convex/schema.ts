@@ -75,16 +75,24 @@ const schema = defineSchema(
       entryLimitPrice: v.optional(v.number()),
       referencePrice: v.optional(v.number()),
       regime: v.optional(v.string()),
-      phaseAtSignal: v.union(
-        v.literal("early"),
-        v.literal("mid"),
-        v.literal("late"),
+      /**
+       * Legacy: the candle-engine phase at the time of the call. The maker
+       * strategy has no phases — it rests a limit and manages the fill.
+       */
+      phaseAtSignal: v.optional(
+        v.union(v.literal("early"), v.literal("mid"), v.literal("late")),
       ),
       entryDeadline: v.optional(v.number()),
       factors: v.optional(v.array(signalFactorValidator)),
       notes: v.optional(v.array(v.string())),
       createdAt: v.number(),
       closePrice: v.optional(v.number()),
+      /**
+       * Maker-exit strategy: the position was given back at the entry price
+       * before the round resolved, so the trade is a flat round trip rather
+       * than a win or a loss. The outcome is recorded as "tie".
+       */
+      exited: v.optional(v.boolean()),
       /** True when Polymarket settled the market on the UP token. */
       upWon: v.optional(v.boolean()),
       outcome: v.optional(

@@ -3,112 +3,98 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { motion } from "framer-motion";
 import {
-  Activity,
+  AlertTriangle,
   ArrowDown,
   ArrowRight,
   ArrowUp,
-  BarChart3,
-  Clock,
-  Gauge,
+  Banknote,
+  CircleDollarSign,
+  Handshake,
+  Repeat,
   ShieldCheck,
+  Target,
   Timer,
-  Waves,
-  Zap,
+  Wallet,
 } from "lucide-react";
 import { useNavigate } from "react-router";
 
-const FACTORS = [
+/** Why a plain limit order loses, and why the exit is the whole strategy. */
+const MECHANISM = [
   {
-    weight: "28%",
-    title: "Импульс 1м / 3м / 5м",
-    body: "Три горизонта доходности на 1-минутных свечах, нормированные на текущую волатильность.",
-    icon: Activity,
+    title: "Тейкер съедает перевес",
+    body: "Polymarket берёт 7% × (1 − цена). При цене 0.30 это 4.9% ставки — ровно величина того перекоса, ради которого всё затевалось. Любая идея, купленная по рынку, умирает здесь.",
+    icon: Banknote,
   },
   {
-    weight: "18%",
-    title: "Структура EMA 9 / 21",
-    body: "Разрыв быстрой и медленной средней показывает, стоит ли за движением тренд.",
-    icon: BarChart3,
+    title: "Мейкер платит ноль",
+    body: "Лимитная заявка не пересекает спред и комиссию не платит. Тот же самый перекос перестаёт съедаться и становится всей прибылью.",
+    icon: Wallet,
   },
   {
-    weight: "14%",
-    title: "Отклонение от VWAP",
-    body: "Цена против средневзвешенной по объёму и наклон самой VWAP за последний час.",
-    icon: Waves,
-  },
-  {
-    weight: "14%",
-    title: "Поток тейкеров",
-    body: "Доля агрессивных покупок в объёме — кто именно исполняет по рынку прямо сейчас.",
-    icon: Zap,
-  },
-  {
-    weight: "14%",
-    title: "Отрыв от открытия раунда",
-    body: "Сколько цена уже прошла от референсной цены раунда — именно её контракт и сравнивает.",
-    icon: Timer,
-  },
-  {
-    weight: "12%",
-    title: "Ускорение импульса",
-    body: "Последняя минута против средней за три: движение разгоняется или выдыхается.",
-    icon: Gauge,
-  },
-];
-
-const TIMELINE = [
-  {
-    time: "12:04:58",
-    title: "Подготовка",
-    body: "Движок держит в памяти последние 200 минутных свечей и каждые 5 секунд перечитывает стакан Polymarket по текущему 15-минутному рынку.",
-  },
-  {
-    time: "12:05:00",
-    title: "Раунд открылся",
-    body: "Реальный bid/ask по контракту уже есть, но входить рано: первая минута — это шум тиков, а не информация.",
-  },
-  {
-    time: "12:06:00",
-    title: "Первая минута закрыта",
-    body: "Окно входа открылось. Стакан читается по-настоящему: UP 0.15/0.16, значит фаворит — DOWN с ask 0.85.",
-  },
-  {
-    time: "12:06:04",
-    title: "Вызов зафиксирован",
-    body: "DOWN по реальному ask 0.85. Свечной движок смотрит в ту же сторону, расхождения нет. Запись уходит в журнал и больше не меняется.",
-  },
-  {
-    time: "12:07:30",
-    title: "Окно закрыто",
-    body: "После 150-й секунды новые входы запрещены: контракт уже отражает движение, перевес уходит рынку.",
-  },
-  {
-    time: "12:10:00",
-    title: "Расчёт",
-    body: "Резолв рынка публикует итог — он и записывается в журнал. P&L считается по той цене, по которой вызов реально был бы куплен.",
-  },
-];
-
-const DISCIPLINE = [
-  {
-    title: "Цена из стакана, а не из формулы",
-    body: "Раньше движок сам придумывал цену контракта и по ней же показывал прибыль: на одних и тех же раундах симулятор давал +24.6% на сделку, а реальный ask — около нуля. Теперь в журнал попадает только настоящая цена.",
-    icon: ShieldCheck,
-  },
-  {
-    title: "Окно входа 60–150 секунд",
-    body: "До закрытия первой минуты в стакане только шум. Дальше 90 секунд, за которые фаворит обычно уже обозначился, но контракт ещё не превратился в лотерею.",
-    icon: Clock,
-  },
-  {
-    title: "Пропуск раунда — часть системы",
-    body: "Явного фаворита бывает примерно в трети раундов, а порога в 0.80 достигают не все. Отсутствие сделки — тоже позиция, и она видна в статистике.",
+    title: "Вход убыточен. И это нормально",
+    body: "Лимит набивается тем, кто прав: раунд проигрывает в −10.2 цента на сделку. Отбор не обойти — он и есть смысл лимитной заявки.",
     icon: ArrowDown,
   },
   {
-    title: "Пропуск раунда не считается провалом",
-    body: "Вызовы ниже порога не публикуются и не портят статистику. Отсутствие сделки — тоже позиция.",
-    icon: Gauge,
+    title: "Выход делает всю работу",
+    body: "Контракт возвращается к цене входа в 91% случаев. В этот момент мы продаём и закрываем сделку почти в ноль, а убыток ограничен спредом, а не ставкой.",
+    icon: Repeat,
+  },
+  {
+    title: "Держатся только победители",
+    body: "9% сделок не возвращаются к лимиту — именно они доходят до расчёта. И выигрывают в 76% случаев: вверх идёт тот, кто не откатился.",
+    icon: ArrowUp,
+  },
+  {
+    title: "Сторону выбирает цена",
+    body: "Лимит ставится на ту сторону, за которую рынок платит больше. DOWN — точное дополнение UP, поэтому лимит 0.35 достижим всегда.",
+    icon: Handshake,
+  },
+];
+
+const ROUND_STEPS = [
+  {
+    time: "12:00:00",
+    title: "Раунд открылся",
+    body: "Контракт стоит около 0.50 с каждой стороны. Сторона выбрана: та, за которую платят больше.",
+  },
+  {
+    time: "12:01:12",
+    title: "Заявка в стакане",
+    body: "Наш bid стоит на 0.35 и ждёт. Мы ничего не платим и ничего не рискуем, пока он там.",
+  },
+  {
+    time: "12:04:31",
+    title: "Ask дошёл до лимита",
+    body: "Продавец исполнил нашу заявку. Позиция открыта — и мы её не держим из упрямства.",
+  },
+  {
+    time: "12:07:02",
+    title: "Цена вернулась к 0.35",
+    body: "Bid снова на нашем уровне. Продаём, сделка закрыта за 2 цента против комиссии.",
+  },
+  {
+    time: "12:14:00",
+    title: "Расчёт",
+    body: "Если цена так и не вернулась, держим до конца. Polymarket публикует результат, и он попадает в журнал.",
+  },
+];
+
+const HONESTY = [
+  {
+    title: "Направление не прогнозируется",
+    body: "На 80% срока раунда лучший предиктор — расстояние от открытия — даёт 93.2% точности. Рынок в этот момент ставит 94.0%. Ошибка меньше одного тика. Из десяти идей выжила одна, и она не про прогноз.",
+    icon: Target,
+  },
+  {
+    title: "Главное допущение не проверено",
+    body: "Мы знаем, что цена возвращается к лимиту. Мы не знаем, что в этот момент кто-то перебил ставку. В падающем рынке биты бьют, а не офферы — и на этом стоит вся прибыль. Это первое, что проверяет консоль.",
+    icon: AlertTriangle,
+  },
+  {
+    title: "Ничего не исполняется автоматически",
+    body: "Ордера не отправляются. Консоль воспроизводит состояние стратегии по живому стакану и ведёт журнал. Симуляцию, выданную за торговлю, мы уже проверяли — она врала в 15 раз.",
+    icon: ShieldCheck,
   },
 ];
 
@@ -120,70 +106,63 @@ function BrandMark({ className }: { className?: string }) {
         className,
       )}
     >
-      <ArrowUp className="size-4" strokeWidth={2.6} />
+      <CircleDollarSign className="size-4" strokeWidth={2.6} />
     </span>
   );
 }
 
-function SignalPreview() {
+function MakerPreview() {
   return (
-    <div className="surface relative overflow-hidden border border-up/25 bg-[linear-gradient(150deg,var(--up-soft),transparent_60%)] p-5 sm:p-6">
+    <div className="surface relative overflow-hidden border border-border/70 bg-[linear-gradient(150deg,var(--primary-soft,var(--muted)),transparent_60%)] p-5 sm:p-6">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <span className="text-sm font-semibold tracking-tight">BTC</span>
-          <span className="font-mono text-[11px] text-muted-foreground">
-            12:05 – 12:10 UTC
-          </span>
-        </div>          <Badge
+          <span className="font-mono text-[11px] text-muted-foreground">12:00 – 12:15 UTC</span>
+        </div>
+        <Badge
           variant="outline"
-          className="rounded-full border-up/30 bg-up-soft px-2.5 py-0.5 text-[10px] font-semibold tracking-wider text-up-ink"
+          className="rounded-full border-sky-500/30 bg-sky-500/10 px-2.5 py-0.5 text-[10px] font-semibold tracking-wider text-sky-500"
         >
-          ОКНО ПОДТВЕРЖДЕНИЯ
+          ЗАЯВКА В СТАКАНЕ
         </Badge>
       </div>
 
       <div className="mt-6 flex items-center gap-5">
-        <span className="relative flex size-14 items-center justify-center rounded-2xl border border-up/25 bg-up-soft text-up-ink">
-          <span className="absolute inset-0 -z-10 animate-signal-pulse rounded-full bg-up/25 blur-xl" />
-          <ArrowUp className="size-7" strokeWidth={2.6} />
+        <span className="relative flex size-14 items-center justify-center rounded-2xl border border-sky-500/25 bg-sky-500/10 text-sky-500">
+          <span className="absolute inset-0 -z-10 animate-signal-pulse rounded-full bg-sky-500/25 blur-xl" />
+          <Timer className="size-7" strokeWidth={2.4} />
         </span>
         <div>
-          <p className="font-mono text-[3.25rem] leading-none font-semibold tracking-tight text-up">
-            UP
+          <p className="font-mono text-[3.25rem] leading-none font-semibold tracking-tight text-sky-500">
+            0.35
           </p>
-          <p className="mt-1.5 text-sm font-medium">Прогноз роста на 15 минут</p>
+          <p className="mt-1.5 text-sm font-medium">Лимит на стороне UP</p>
         </div>
       </div>
 
       <div className="mt-6 grid grid-cols-3 gap-3">
         <div className="rounded-xl border border-border/70 bg-card/70 px-3 py-2.5">
-          <p className="text-[10px] tracking-wider text-muted-foreground uppercase">
-            Уверенность
-          </p>
-          <p className="mt-1 font-mono text-xl tabular-nums">74%</p>
+          <p className="text-[10px] tracking-wider text-muted-foreground uppercase">Ask сейчас</p>
+          <p className="mt-1 font-mono text-xl tabular-nums">0.62</p>
         </div>
         <div className="rounded-xl border border-border/70 bg-card/70 px-3 py-2.5">
-          <p className="text-[10px] tracking-wider text-muted-foreground uppercase">
-            Вход до
-          </p>
-          <p className="mt-1 font-mono text-xl tabular-nums">0.52</p>
+          <p className="text-[10px] tracking-wider text-muted-foreground uppercase">Комиссия</p>
+          <p className="mt-1 font-mono text-xl tabular-nums text-emerald-500">0%</p>
         </div>
         <div className="rounded-xl border border-border/70 bg-card/70 px-3 py-2.5">
-          <p className="text-[10px] tracking-wider text-muted-foreground uppercase">
-            Отрыв
-          </p>
-          <p className="mt-1 font-mono text-xl tabular-nums">0.7 ATR</p>
+          <p className="text-[10px] tracking-wider text-muted-foreground uppercase">Возврат</p>
+          <p className="mt-1 font-mono text-xl tabular-nums">91%</p>
         </div>
       </div>
 
       <div className="mt-5">
         <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
-          <div className="relative h-full w-[38%] overflow-hidden rounded-full bg-primary">
+          <div className="relative h-full w-[35%] overflow-hidden rounded-full bg-sky-500">
             <span className="absolute inset-y-0 w-14 animate-signal-sweep bg-[linear-gradient(90deg,transparent,var(--primary-foreground),transparent)] opacity-40" />
           </div>
         </div>
         <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
-          6 факторов согласованы · рваного рынка нет · вызов записан в журнал
+          Лимит в стакане · мы не платим комиссию и не держим позицию из упрямства
         </p>
       </div>
     </div>
@@ -232,19 +211,16 @@ export default function Landing() {
         <div className="mx-auto flex w-full max-w-6xl items-center gap-3 px-4 py-3 sm:px-6">
           <BrandMark />
           <div className="min-w-0">
-            <p className="text-sm leading-tight font-semibold tracking-tight">
-              Favourite Edge
-            </p>
+            <p className="text-sm leading-tight font-semibold tracking-tight">Maker Exit</p>
             <p className="truncate text-[11px] leading-tight text-muted-foreground">
-              Реальный стакан Polymarket · 15 минут · BTC и ETH
+              Вход без комиссии · выход в безубыток
             </p>
           </div>
           <nav className="ms-6 hidden items-center gap-6 md:flex">
             {[
-              { href: "#signal", label: "Сигнал" },
-              { href: "#engine", label: "Движок" },
-              { href: "#round", label: "Пример раунда" },
-              { href: "#discipline", label: "Дисциплина" },
+              { href: "#mechanism", label: "Механизм" },
+              { href: "#round", label: "Раунд" },
+              { href: "#discipline", label: "Честность" },
             ].map((item) => (
               <a
                 key={item.href}
@@ -266,7 +242,7 @@ export default function Landing() {
               Войти
             </Button>
             <Button type="button" size="sm" onClick={openConsole}>
-              Открыть сигнал
+              Открыть консоль
             </Button>
           </div>
         </div>
@@ -287,202 +263,110 @@ export default function Landing() {
               Polymarket · 15-минутные раунды Up/Down
             </span>
             <h1 className="mt-5 text-[2.5rem] leading-[1.05] font-semibold tracking-tight text-balance sm:text-5xl lg:text-[3.4rem]">
-              Не угадываем направление — покупаем фаворита, когда рынок его недоплачивает
+              Направление не угадать. Можно не платить комиссию и выйти в безубыток
             </h1>
             <p className="mt-5 max-w-xl text-sm leading-relaxed text-muted-foreground sm:text-base">
-              Свечной движок попадал в 75.5% раундов — но рынок брал за это
-              0.745, то есть ровно цену безубытка. На 8631 реальном раунде за 15
-              дней выяснилось другое: рынок недооценивает почти решённые раунды.
-              Покупка стороны с ask ≥ 0.80 даёт EV +1.9% при 1682 сделках, и
-              +3.0%, если свечной движок смотрит в ту же сторону.
+              Мы проверили 5760 настоящих 15-минутных раундов. Направление рынок
+              знает лучше нас: на 80% срока лучший предиктор даёт 93.2%, а котировка —
+              94.0%. Ошибка меньше тика. Зато перевес, который в этих раундах есть,
+              съедала комиссия тейкера — целиком. Лимитная заявка её не платит, а
+              выход по цене входа ограничивает убыток двумя центами.
             </p>
+
+            <div className="mt-7 grid max-w-lg grid-cols-3 gap-3">
+              {[
+                { label: "P&L на сделку", value: "+2.1¢", tone: "text-emerald-500" },
+                { label: "Проигрышных дней", value: "3 из 31" },
+                { label: "Проверено раундов", value: "5760" },
+              ].map((stat) => (
+                <div
+                  key={stat.label}
+                  className="surface rounded-xl border border-border/70 px-3 py-2.5"
+                >
+                  <p className="text-[10px] tracking-wider text-muted-foreground uppercase">
+                    {stat.label}
+                  </p>
+                  <p className={cn("mt-1 font-mono text-lg tabular-nums", stat.tone)}>
+                    {stat.value}
+                  </p>
+                </div>
+              ))}
+            </div>
+
             <div className="mt-7 flex flex-wrap items-center gap-3">
-              <Button
-                type="button"
-                size="lg"
-                className="gap-2"
-                onClick={openConsole}
-              >
-                Открыть консоль сигнала
+              <Button type="button" onClick={openConsole} className="gap-2">
+                Открыть консоль
                 <ArrowRight className="size-4" />
               </Button>
-              <Button
-                type="button"
-                size="lg"
-                variant="outline"
-                onClick={() => {
-                  document
-                    .getElementById("engine")
-                    ?.scrollIntoView({ behavior: "smooth" });
-                }}
-              >
-                Как считает движок
+              <Button type="button" variant="outline" onClick={openAuth}>
+                Войти и смотреть раунды
               </Button>
             </div>
-            <p className="mt-6 text-xs leading-relaxed text-muted-foreground">
-              Публичные данные Binance · API-ключи не нужны · ордера не отправляются
-            </p>
           </motion.div>
 
           <motion.div
             initial={{ opacity: 0, y: 16 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.5, delay: 0.1, ease: "easeOut" }}
-            id="signal"
           >
-            <SignalPreview />
+            <MakerPreview />
           </motion.div>
         </div>
       </section>
 
-      {/* why timing */}
-      <section className="border-t border-border/70 bg-card/50">
-        <div className="mx-auto w-full max-w-6xl px-4 py-16 sm:px-6 sm:py-20">
+      {/* mechanism */}
+      <section id="mechanism" className="border-t border-border/60 py-20 sm:py-24">
+        <div className="mx-auto w-full max-w-6xl px-4 sm:px-6">
           <SectionHeading
-            eyebrow="Где на самом деле живёт перевес"
-            title="Точность без учёта цены — обман"
-            body="Угадывать направление по споту бессмысленно: цена контракта следует за спотом за доли секунды и уже содержит этот сигнал. Единственное, что осталось, — поведенческий перекос самого рынка, и его видно на настоящих ценах."
+            eyebrow="Механизм"
+            title="Почему вход убыточен, а стратегия зарабатывает"
+            body="Это не прогноз и не сигнал. Это утверждение об исполнении: мы платим ноль комиссии, принимаем отрицательное качество входа как цену за право выйти без убытка."
           />
-          <div className="mt-10 grid gap-4 md:grid-cols-3">
-            {[
-              {
-                title: "Точность съедается ценой",
-                body: "Наш движок попадал в 75.5% раундов при средней цене 0.745 — это ноль в пределах погрешности. Симулятор показывал +24.6% на сделку, потому что цену придумывал он сам.",
-                icon: Clock,
-              },
-              {
-                title: "Фаворит недооценён",
-                body: "Сторона с ask ≥ 0.80 выигрывала в 87.9% случаев при средней цене 0.860. Перекос устойчив: 4 из 5 временных блоков и оба актива в плюсе.",
-                icon: Activity,
-              },
-              {
-                title: "Пропуск раунда — часть системы",
-                body: "Фаворит есть примерно в трети раундов, порог проходит не каждый. Журнал показывает среднюю реальную цену, чтобы перевес был виден рядом с ценой, по которой он и получен.",
-                icon: ShieldCheck,
-              },
-            ].map((item, index) => (
+
+          <div className="mt-12 grid gap-5 md:grid-cols-2 lg:grid-cols-3">
+            {MECHANISM.map((item, index) => (
               <motion.article
                 key={item.title}
                 initial={{ opacity: 0, y: 12 }}
                 whileInView={{ opacity: 1, y: 0 }}
                 viewport={{ once: true, margin: "-60px" }}
-                transition={{ duration: 0.35, delay: index * 0.05 }}
-                className="surface border border-border p-5"
+                transition={{ duration: 0.35, delay: (index % 3) * 0.06, ease: "easeOut" }}
+                className="surface rounded-2xl border border-border/70 p-5"
               >
-                <span className="flex size-10 items-center justify-center rounded-xl border border-border bg-muted text-foreground">
-                  <item.icon className="size-5" />
+                <span className="flex size-9 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                  <item.icon className="size-4" />
                 </span>
-                <h3 className="mt-4 text-sm font-semibold tracking-tight">
-                  {item.title}
-                </h3>
-                <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-                  {item.body}
-                </p>
+                <h3 className="mt-4 text-sm font-semibold tracking-tight">{item.title}</h3>
+                <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{item.body}</p>
               </motion.article>
             ))}
           </div>
         </div>
       </section>
 
-      {/* engine */}
-      <section id="engine" className="scroll-mt-20">
-        <div className="mx-auto w-full max-w-6xl px-4 py-16 sm:px-6 sm:py-20">
+      {/* round */}
+      <section id="round" className="border-t border-border/60 py-20 sm:py-24">
+        <div className="mx-auto w-full max-w-6xl px-4 sm:px-6">
           <SectionHeading
-            eyebrow="Движок"
-            title="Шесть факторов, два фильтра, один вызов"
-            body="Каждый фактор даёт нормализованный голос в диапазоне от −1 до +1. Итоговый перевес — взвешенная сумма; фильтры срезают уверенность, если движение растянуто или рынок рваный."
+            eyebrow="Раунд"
+            title="Один раунд, шаг за шагом"
+            body="Всё, что происходит, видно в консоли на настоящем стакане. Ни одного перехода по отставшей котировке."
           />
-          <div className="mt-10 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {FACTORS.map((factor, index) => (
-              <motion.article
-                key={factor.title}
-                initial={{ opacity: 0, y: 12 }}
-                whileInView={{ opacity: 1, y: 0 }}
-                viewport={{ once: true, margin: "-60px" }}
-                transition={{ duration: 0.35, delay: index * 0.04 }}
-                className="surface flex flex-col gap-3 border border-border p-5"
-              >
-                <div className="flex items-center justify-between">
-                  <span className="flex size-9 items-center justify-center rounded-lg border border-border bg-muted">
-                    <factor.icon className="size-4" />
-                  </span>
-                  <span className="font-mono text-xs text-muted-foreground">
-                    вес {factor.weight}
-                  </span>
-                </div>
-                <h3 className="text-sm font-semibold tracking-tight">
-                  {factor.title}
-                </h3>
-                <p className="text-xs leading-relaxed text-muted-foreground">
-                  {factor.body}
-                </p>
-              </motion.article>
-            ))}
-          </div>
-          <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            <div className="surface border border-warn/25 bg-warn-soft/40 p-5">
-              <p className="text-[11px] font-semibold tracking-[0.16em] text-warn-ink uppercase">
-                Фильтр 1 · растяжение
-              </p>
-              <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-                RSI(14) выше 76 или ниже 24 — уверенность умножается на 0.85: движок
-                не догоняет уже отработанное движение.
-              </p>
-            </div>
-            <div className="surface border border-warn/25 bg-warn-soft/40 p-5">
-              <p className="text-[11px] font-semibold tracking-[0.16em] text-warn-ink uppercase">
-                Фильтр 2 · режим волатильности
-              </p>
-              <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-                Волатильность выше 1.7× медианы — ×0.86 и минус 30% размера. Ниже
-                0.55× медианы — ×0.92: узкий диапазон редко даёт цель.
-              </p>
-            </div>
-          </div>
-        </div>
-      </section>
 
-      {/* example round */}
-      <section id="round" className="scroll-mt-20 border-y border-border/70 bg-card/50">
-        <div className="mx-auto w-full max-w-6xl px-4 py-16 sm:px-6 sm:py-20">
-          <SectionHeading
-            eyebrow="Пример раунда"
-            title="Как выглядят пять минут от открытия до расчёта"
-            body="Один реальный сценарий по шагам: от подготовки данных до записи в журнал."
-          />
-          <ol className="mt-10 flex flex-col">
-            {TIMELINE.map((step, index) => (
+          <ol className="mt-12 flex flex-col gap-0">
+            {ROUND_STEPS.map((step, index) => (
               <motion.li
                 key={step.time}
                 initial={{ opacity: 0, x: -8 }}
                 whileInView={{ opacity: 1, x: 0 }}
                 viewport={{ once: true, margin: "-60px" }}
-                transition={{ duration: 0.3, delay: index * 0.04 }}
-                className="grid grid-cols-[auto_1fr] gap-5 pb-6 last:pb-0"
+                transition={{ duration: 0.3, delay: index * 0.05, ease: "easeOut" }}
+                className="flex gap-5 border-l border-border/70 py-4 pl-5 last:pb-0"
               >
-                <div className="flex flex-col items-center">
-                  <span className="font-mono text-[11px] text-muted-foreground">
-                    {step.time}
-                  </span>
-                  <span
-                    className={cn(
-                      "mt-2 flex size-7 items-center justify-center rounded-full border font-mono text-[10px]",
-                      index < 4
-                        ? "border-up/30 bg-up-soft text-up-ink"
-                        : "border-border bg-muted text-muted-foreground",
-                    )}
-                  >
-                    {index + 1}
-                  </span>
-                  {index < TIMELINE.length - 1 ? (
-                    <span className="mt-2 w-px flex-1 bg-border" />
-                  ) : null}
-                </div>
-                <div className="pt-0.5 pb-1">
-                  <h3 className="text-sm font-semibold tracking-tight">
-                    {step.title}
-                  </h3>
-                  <p className="mt-1.5 max-w-xl text-xs leading-relaxed text-muted-foreground">
+                <span className="font-mono text-xs text-muted-foreground">{step.time}</span>
+                <div className="min-w-0">
+                  <h3 className="text-sm font-medium tracking-tight">{step.title}</h3>
+                  <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
                     {step.body}
                   </p>
                 </div>
@@ -493,84 +377,68 @@ export default function Landing() {
       </section>
 
       {/* discipline */}
-      <section id="discipline" className="scroll-mt-20">
-        <div className="mx-auto w-full max-w-6xl px-4 py-16 sm:px-6 sm:py-20">
+      <section id="discipline" className="border-t border-border/60 py-20 sm:py-24">
+        <div className="mx-auto w-full max-w-6xl px-4 sm:px-6">
           <SectionHeading
-            eyebrow="Риск и дисциплина"
-            title="Правила, которые защищают от главной ошибки"
-            body="Главная ошибка на 15-минутных рынках — войти поздно, потому что «уже точно видно». Эти правила запрещают такие сделки заранее."
+            eyebrow="Честность"
+            title="Что проверено, а что нет"
+            body="Проект живёт тем, что недоконченные части названы своими именами. Иначе через две недели мы бы снова искали прибыль там, где её нет."
           />
-          <div className="mt-10 grid gap-3 sm:grid-cols-2">
-            {DISCIPLINE.map((item, index) => (
+
+          <div className="mt-12 grid gap-5 lg:grid-cols-3">
+            {HONESTY.map((item, index) => (
               <motion.article
                 key={item.title}
                 initial={{ opacity: 0, y: 12 }}
                 whileInView={{ opacity: 1, y: 0 }}
                 viewport={{ once: true, margin: "-60px" }}
-                transition={{ duration: 0.35, delay: index * 0.04 }}
-                className="surface flex gap-4 border border-border p-5"
+                transition={{ duration: 0.35, delay: index * 0.06, ease: "easeOut" }}
+                className="surface rounded-2xl border border-border/70 p-5"
               >
-                <span className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-border bg-muted">
+                <span className="flex size-9 items-center justify-center rounded-xl bg-muted text-foreground">
                   <item.icon className="size-4" />
                 </span>
-                <div>
-                  <h3 className="text-sm font-semibold tracking-tight">
-                    {item.title}
-                  </h3>
-                  <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-                    {item.body}
-                  </p>
-                </div>
+                <h3 className="mt-4 text-sm font-semibold tracking-tight">{item.title}</h3>
+                <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{item.body}</p>
               </motion.article>
             ))}
           </div>
         </div>
       </section>
 
-      {/* final CTA */}
-      <section className="border-t border-border/70">
-        <div className="mx-auto w-full max-w-6xl px-4 py-16 sm:px-6 sm:py-20">
-          <div className="surface relative overflow-hidden border border-border px-6 py-12 text-center sm:px-12 sm:py-16">
-            <div className="pointer-events-none absolute inset-x-0 top-0 h-full stripe-grid opacity-50" />
-            <div className="relative">
-              <h2 className="text-2xl font-semibold tracking-tight text-balance sm:text-3xl">
-                Один вызов Up/Down на раунд — и журнал, который проверяет стратегию
-              </h2>
-              <p className="mx-auto mt-4 max-w-xl text-sm leading-relaxed text-muted-foreground">
-                Консоль показывает перевес, цену входа, факторы и таймер до конца
-                окна. Каждый вызов фиксируется и оценивается по реальному закрытию
-                раунда.
-              </p>
-              <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
-                <Button
-                  type="button"
-                  size="lg"
-                  className="gap-2"
-                  onClick={openConsole}
-                >
-                  Открыть консоль сигнала
-                  <ArrowRight className="size-4" />
-                </Button>
-                <Button type="button" size="lg" variant="ghost" onClick={openAuth}>
-                  Войти по email
-                </Button>
-              </div>
+      {/* cta */}
+      <section className="border-t border-border/60 py-20 sm:py-24">
+        <div className="mx-auto w-full max-w-6xl px-4 sm:px-6">
+          <div className="surface rounded-3xl border border-border/70 px-6 py-14 text-center sm:px-12">
+            <h2 className="mx-auto max-w-2xl text-2xl font-semibold tracking-tight text-balance sm:text-3xl">
+              Стратегия, которая честно показывает свою уязвимость
+            </h2>
+            <p className="mx-auto mt-4 max-w-xl text-sm leading-relaxed text-muted-foreground">
+              Консоль ведёт журнал по живому стакану, чтобы проверить единственное
+              допущение, на котором держится весь перевес. Если оно не выдержит —
+              вы увидите это первым, а не через месяц.
+            </p>
+            <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
+              <Button type="button" onClick={openAuth} className="gap-2">
+                Начать наблюдение
+                <ArrowRight className="size-4" />
+              </Button>
+              <Button type="button" variant="outline" onClick={openConsole}>
+                Открыть консоль
+              </Button>
             </div>
           </div>
         </div>
       </section>
 
-      <footer className="border-t border-border/70">
-        <div className="mx-auto flex w-full max-w-6xl flex-col gap-3 px-4 py-8 sm:flex-row sm:items-center sm:justify-between sm:px-6">
-          <div className="flex items-center gap-3">
-            <BrandMark className="size-7" />
-            <span className="text-xs text-muted-foreground">
-              Favourite Edge — сигнальная стратегия для 15-минутных рынков Polymarket
-            </span>
-          </div>
-          <p className="max-w-md text-[11px] leading-relaxed text-muted-foreground">
-            Не финансовая рекомендация. Ордера не отправляются: инструмент считает
-            перевес и ведёт журнал вызовов.
+      <footer className="border-t border-border/60 py-8">
+        <div className="mx-auto flex w-full max-w-6xl flex-col items-center gap-2 px-4 text-center sm:px-6">
+          <p className="text-xs text-muted-foreground">
+            Maker Exit — вход лимитом без комиссии, выход в безубыток
+          </p>
+          <p className="max-w-2xl text-[11px] leading-relaxed text-muted-foreground/80">
+            Все расчёты сделаны по настоящим ценам Polymarket. Ордера не исполняются
+            автоматически, а стратегия не является инвестиционной рекомендацией.
           </p>
         </div>
       </footer>

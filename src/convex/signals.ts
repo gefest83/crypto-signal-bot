@@ -10,9 +10,16 @@ import { signalFactorValidator } from "./schema";
  * valued them at a price the engine invented for itself — which is how the
  * journal could show a large simulated profit while the real book lost money.
  *
- * Now a call is only ever written when the bot has a real Polymarket ask, the
- * real ask is stored alongside it, and the call is graded against Polymarket's
- * own published result for that market. No price in this file is estimated.
+ * Now a row is only ever written when the bot has a real Polymarket book, the
+ * real bid/ask is stored alongside it, and the trade is graded against
+ * Polymarket's own published result for that market. No price here is
+ * estimated.
+ *
+ * The journal serves the maker-exit strategy, so one extra field matters:
+ * `exited` marks a position that was given back at its entry price before the
+ * round resolved. Those trades are flat round trips, not wins or losses, and
+ * grading them as losses is exactly the accounting error that would make this
+ * strategy look like it loses money.
  *
  * Note the deliberate absence of `fetch` here: Convex only allows outbound
  * requests from actions, so reading Polymarket's resolution lives in
@@ -27,23 +34,11 @@ export const logSignal = mutation({
     marketSlug: v.optional(v.string()),
     tokenId: v.optional(v.string()),
     direction: v.union(v.literal("up"), v.literal("down")),
-    score: v.optional(v.number()),
-    confidence: v.optional(v.number()),
-    effectiveConfidence: v.optional(v.number()),
-    estimatedProbability: v.optional(v.number()),
-    maxEntryPrice: v.optional(v.number()),
     entryLimitPrice: v.optional(v.number()),
     entryBid: v.optional(v.number()),
     entryAsk: v.optional(v.number()),
-    referencePrice: v.optional(v.number()),
-    regime: v.optional(v.string()),
-    phaseAtSignal: v.union(
-      v.literal("early"),
-      v.literal("mid"),
-      v.literal("late"),
-    ),
-    entryDeadline: v.optional(v.number()),
-    factors: v.optional(v.array(signalFactorValidator)),
+    /** Maker exit: the position was closed at cost before the round resolved. */
+    exited: v.optional(v.boolean()),
     notes: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
@@ -83,7 +78,14 @@ export const applyResolution = mutation({
     const signal = await ctx.db.get(id);
     if (!signal || signal.userId !== userId) return null;
     if (signal.outcome) return signal.outcome;
-    const outcome = (upWon ? "up" : "down") === signal.direction ? "win" : "loss";
+    // A maker trade given back at its entry price did not win or lose: it cost
+    // only the spread. Calling that a loss is what would make the strategy look
+    // broken when it is merely flat.
+    const outcome = signal.exited
+      ? "tie"
+      : (upWon ? "up" : "down") === signal.direction
+        ? "win"
+        : "loss";
     await ctx.db.patch(id, { upWon, outcome, resolvedAt: Date.now() });
     return outcome;
   },
