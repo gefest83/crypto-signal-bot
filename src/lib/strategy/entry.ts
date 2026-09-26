@@ -37,6 +37,41 @@ export const ENTRY_END_MS = 150_000;
 /** Longest answer Polymarket takes before the next round replaces the market. */
 export const ROUND_MS = 5 * 60_000;
 
+/**
+ * Polymarket taker fee rate for the crypto category.
+ *
+ * Their formula is `fee = shares × rate × p × (1 − p)`. With a $1 stake
+ * (shares = 1 / p) that collapses to `fee = rate × (1 − p)` of the stake:
+ * 1.40% at p = 0.80, 0.98% at p = 0.86, 0.35% at p = 0.95.
+ *
+ * This is why the whole edge only exists for makers: paying 0.98% of the stake
+ * to cross a 1-cent spread would leave roughly +0.5% instead of +1.9%.
+ */
+export const TAKER_FEE_RATE = 0.07;
+/** Makers are never charged, and receive this share of collected taker fees. */
+export const MAKER_REBATE_SHARE = 0.2;
+/** Price grid on these markets. */
+export const PRICE_TICK = 0.01;
+
+export type Execution = "maker" | "taker";
+
+/** Taker fee in USDC for a $1 stake committed at `price`. */
+export function takerFee(price: number): number {
+  if (price <= 0 || price >= 1) return 0;
+  return TAKER_FEE_RATE * (1 - price);
+}
+
+/**
+ * The price to rest a maker order at: the midpoint, rounded down to the tick
+ * so it never crosses the offer, and never below the current bid.
+ */
+export function limitPriceFor(bid: number | null, ask: number | null): number | null {
+  if (bid === null || ask === null || ask <= bid) return null;
+  const mid = (bid + ask) / 2;
+  const price = Math.max(bid, Math.floor(mid / PRICE_TICK) * PRICE_TICK);
+  return Math.round(price * 100) / 100;
+}
+
 export type Side = "up" | "down";
 
 export type EntryReadout = {
@@ -51,6 +86,8 @@ export type EntryReadout = {
   ask: number | null;
   /** Real Polymarket bid on that same side. */
   bid: number | null;
+  /** Where a maker order would rest: mid of the book, never crossing. */
+  limitPrice: number | null;
   /** Real ask on the favoured side, even when we decline to buy it. */
   favouriteAsk: number | null;
   /** True only when a trade is actually publishable. */
@@ -102,6 +139,7 @@ export function evaluateEntry({
     favourite: null as Side | null,
     ask: null as number | null,
     bid: null as number | null,
+    limitPrice: null as number | null,
     favouriteAsk: null as number | null,
     eligible: false,
     checkedAt: now,
@@ -137,6 +175,7 @@ export function evaluateEntry({
   const favouriteAsk = upFavourite ? upAsk : downAsk;
   const ask = favouriteAsk;
   const bid = upFavourite ? upBid : downBid;
+  const limitPrice = limitPriceFor(bid, ask);
 
   if (favouriteAsk === null) {
     return {
@@ -152,6 +191,7 @@ export function evaluateEntry({
       favourite,
       ask,
       bid,
+      limitPrice,
       favouriteAsk,
       direction: "stand-aside",
       reason: `Рынок не выделил фаворита (${favouriteAsk.toFixed(2)} < ${FAVORITE_MIN_ASK.toFixed(2)}) — покупать нечего.`,
@@ -169,6 +209,7 @@ export function evaluateEntry({
       favourite,
       ask,
       bid,
+      limitPrice,
       favouriteAsk,
       direction: "stand-aside",
       reason: `Рынок за ${favourite.toUpperCase()} на ${favouriteAsk.toFixed(2)}, а свечной движок — ${confirm.toUpperCase()}. Расхождение, пропускаем.`,
@@ -180,18 +221,29 @@ export function evaluateEntry({
     favourite,
     ask,
     bid,
+    limitPrice,
     favouriteAsk,
     direction: favourite,
     eligible: true,
-    reason: `Фаворит ${favourite.toUpperCase()} по ${ask!.toFixed(2)} — рынок недооценивает решённые раунды, здесь и живёт перевес.`,
+    reason: `Фаворит ${favourite.toUpperCase()} по ${ask!.toFixed(2)} — рынок недооценивает решённые раунды, здесь и живёт перевес. Вход лимитом: тейкерская комиссия 7%×(1−цена) его бы уничтожила.`,
   };
 }
 
 /**
- * Net P&L of a $1 stake bought at `ask`, given the real outcome.
+ * Net P&L of a $1 stake at `price`, given the real outcome.
+ *
+ * `maker` rests a limit order: no fee, and the price is the one we chose.
+ * `taker` crosses the spread and also pays Polymarket's crypto taker fee, which
+ * is charged whether the trade wins or loses.
+ *
  * Kept next to the rule so the journal and the UI can never disagree.
  */
-export function pnlForEntry(ask: number, won: boolean): number {
-  if (!won) return -1;
-  return ask > 0 ? 1 / ask - 1 : 0;
+export function pnlForEntry(
+  price: number,
+  won: boolean,
+  execution: Execution = "maker",
+): number {
+  if (price <= 0) return 0;
+  const fee = execution === "taker" ? takerFee(price) : 0;
+  return (won ? 1 / price - 1 : -1) - fee;
 }

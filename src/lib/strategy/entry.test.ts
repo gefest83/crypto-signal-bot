@@ -4,7 +4,9 @@ import {
   ENTRY_START_MS,
   FAVORITE_MIN_ASK,
   evaluateEntry,
+  limitPriceFor,
   pnlForEntry,
+  takerFee,
 } from "./entry";
 
 const START = Date.UTC(2026, 8, 26, 12, 0, 0);
@@ -125,6 +127,55 @@ describe("торгуемость котировки", () => {
   it("входит, когда котировка из стакана", () => {
     const readout = evaluateEntry({ ...upFavourite, tradable: true });
     expect(readout.eligible).toBe(true);
+  });
+});
+
+describe("цена лимита в вызове", () => {
+  it("отдаётся вместе с вызовом", () => {
+    const readout = evaluateEntry({
+      start: START,
+      now: at(90_000),
+      upAsk: 0.2,
+      upBid: 0.19,
+      downAsk: 0.83,
+      downBid: 0.82,
+    });
+    expect(readout.eligible).toBe(true);
+    expect(readout.ask).toBe(0.83);
+    expect(readout.limitPrice).toBe(0.82);
+  });
+});
+
+describe("комиссии Polymarket", () => {
+  it("тейкерская комиссия = 7% × (1 − цена)", () => {
+    expect(takerFee(0.86)).toBeCloseTo(0.07 * 0.14, 6);
+    expect(takerFee(0.8)).toBeCloseTo(0.07 * 0.2, 6);
+    expect(takerFee(0.95)).toBeCloseTo(0.07 * 0.05, 6);
+  });
+
+  it("мейкер не платит ничего", () => {
+    expect(pnlForEntry(0.86, true, "maker")).toBeCloseTo(1 / 0.86 - 1, 6);
+    expect(pnlForEntry(0.86, false, "maker")).toBe(-1);
+  });
+
+  it("тейкер платит комиссию и на выигрыше, и на проигрыше", () => {
+    expect(pnlForEntry(0.86, true, "taker")).toBeCloseTo(1 / 0.86 - 1 - 0.07 * 0.14, 6);
+    expect(pnlForEntry(0.86, false, "taker")).toBeCloseTo(-1 - 0.07 * 0.14, 6);
+  });
+});
+
+describe("цена лимитной заявки", () => {
+  it("ставится в середину спреда, не пересекая ask", () => {
+    expect(limitPriceFor(0.84, 0.88)).toBe(0.86);
+  });
+
+  it("при спреде в один тик встаёт в бид", () => {
+    expect(limitPriceFor(0.85, 0.86)).toBe(0.85);
+  });
+
+  it("не придумывает цену без стакана", () => {
+    expect(limitPriceFor(null, 0.86)).toBeNull();
+    expect(limitPriceFor(0.85, null)).toBeNull();
   });
 });
 

@@ -118,10 +118,10 @@ export function RoundHistory() {
         </AlertDialog>
       </header>
 
-      <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-5">
+      <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-6">
         <div className="rounded-xl border border-border/70 bg-muted/40 px-4 py-3">
           <p className="text-[11px] tracking-wider text-muted-foreground uppercase">
-            P&amp;L реальный
+            P&amp;L мейкер
           </p>
           <p
             className={cn(
@@ -132,7 +132,23 @@ export function RoundHistory() {
             {stats?.realPnl === undefined ? "—" : money(stats.realPnl)}
           </p>
           <p className="mt-1 text-[10px] text-muted-foreground">
-            {real > 0 ? `${real} сделок по стакану` : "пока нет сделок по стакану"}
+            {real > 0 ? `${real} сделок · лимит, комиссии нет` : "пока нет сделок по стакану"}
+          </p>
+        </div>
+        <div className="rounded-xl border border-border/70 bg-muted/40 px-4 py-3">
+          <p className="text-[11px] tracking-wider text-muted-foreground uppercase">
+            P&amp;L тейкер
+          </p>
+          <p
+            className={cn(
+              "mt-1 font-mono text-2xl font-semibold tabular-nums",
+              (stats?.takerPnl ?? 0) >= 0 ? "text-up-ink" : "text-down-ink",
+            )}
+          >
+            {stats?.takerPnl === undefined ? "—" : money(stats.takerPnl)}
+          </p>
+          <p className="mt-1 text-[10px] text-muted-foreground">
+            пересечение спреда + комиссия 7%×(1−цена)
           </p>
         </div>
         <div className="rounded-xl border border-border/70 bg-muted/40 px-4 py-3">
@@ -214,7 +230,7 @@ export function RoundHistory() {
                 Источник
               </TableHead>
               <TableHead className="text-right text-[11px] tracking-wider uppercase">
-                P&amp;L
+                P&amp;L тейкер
               </TableHead>
               <TableHead className="text-right text-[11px] tracking-wider uppercase">
                 Итог
@@ -238,7 +254,7 @@ export function RoundHistory() {
                 const bid = row.entryBid ?? null;
                 const pnl =
                   row.outcome && ask
-                    ? pnlForEntry(ask, row.outcome === "win")
+                    ? pnlForEntry(ask, row.outcome === "win", "taker")
                     : null;
                 return (
                   <TableRow key={row._id}>

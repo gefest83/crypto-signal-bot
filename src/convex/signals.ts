@@ -138,6 +138,13 @@ const paidAt = (row: { entryAsk?: number; entryLimitPrice?: number; maxEntryPric
   return typeof price === "number" && price > 0 ? price : null;
 };
 
+/** Mirrors pnlForEntry on the client; kept server-side so stats never drift. */
+const TAKER_FEE_RATE = 0.07;
+const pnlAt = (price: number, won: boolean, taker: boolean) => {
+  const fee = taker ? TAKER_FEE_RATE * (1 - price) : 0;
+  return (won ? 1 / price - 1 : -1) - fee;
+};
+
 export const signalStats = query({
   args: { symbol: v.optional(v.string()) },
   handler: async (ctx, args) => {
@@ -150,6 +157,7 @@ export const signalStats = query({
       pending: 0,
       totalPnl: 0,
       realPnl: 0,
+      takerPnl: 0,
       realTrades: 0,
       realWins: 0,
       avgAsk: null as number | null,
@@ -180,6 +188,7 @@ export const signalStats = query({
     let pending = 0;
     let totalPnl = 0;
     let realPnl = 0;
+    let takerPnl = 0;
     let realTrades = 0;
     let realWins = 0;
     let askSum = 0;
@@ -197,10 +206,12 @@ export const signalStats = query({
       totalPnl += pnl;
 
       if (row.entryAsk !== undefined && row.entryAsk > 0) {
-        realPnl += pnl;
+        const won = row.outcome === "win";
+        realPnl += pnlAt(row.entryAsk, won, false);
+        takerPnl += pnlAt(row.entryAsk, won, true);
         realTrades += 1;
         askSum += row.entryAsk;
-        if (row.outcome === "win") realWins += 1;
+        if (won) realWins += 1;
       }
 
       if (row.outcome === "win") wins += 1;
@@ -221,6 +232,7 @@ export const signalStats = query({
       pending,
       totalPnl: Math.round(totalPnl * 100) / 100,
       realPnl: Math.round(realPnl * 100) / 100,
+      takerPnl: Math.round(takerPnl * 100) / 100,
       realTrades,
       realWins,
       avgAsk: realTrades > 0 ? Math.round((askSum / realTrades) * 1000) / 1000 : null,

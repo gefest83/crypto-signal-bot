@@ -14,6 +14,7 @@ import {
   ENTRY_END_MS,
   ENTRY_START_MS,
   FAVORITE_MIN_ASK,
+  takerFee,
   type EntryReadout,
 } from "@/lib/strategy/entry";
 import { cn } from "@/lib/utils";
@@ -215,7 +216,9 @@ export function SignalHero({
   const nextRound = Math.max(0, windowEnd - now);
   const ask = call?.ask ?? entry?.ask ?? null;
   const bid = call?.bid ?? entry?.bid ?? null;
+  const limit = call?.limitPrice ?? entry?.limitPrice ?? null;
   const spread = ask !== null && bid !== null ? Math.round((ask - bid) * 100) / 100 : null;
+  const fee = ask === null ? null : takerFee(ask);
 
   const headline = warming
     ? "—"
@@ -242,7 +245,7 @@ export function SignalHero({
   const subtitle = warming
     ? "Первый расчёт появится через пару секунд."
     : showCall
-      ? `Вызов зафиксирован по настоящей цене ${ask?.toFixed(2)} и не меняется до конца раунда.`
+      ? `Вызов зафиксирован по настоящей цене ${ask?.toFixed(2)} и не меняется до конца раунда. Вход — лимитной заявкой, иначе комиссия съедает перевес.`
       : skipped
         ? `Перевеса не было. Следующий раунд через ${formatCountdown(nextRound)}.`
         : entry?.reason;
@@ -394,14 +397,29 @@ export function SignalHero({
             <ShieldAlert className="size-4 shrink-0 text-muted-foreground" />
             <div className="min-w-0">
               <p className="text-[11px] font-medium tracking-wider text-muted-foreground uppercase">
-                Цена из стакана Polymarket
+                Цена лимита · мейкер
               </p>
               <p className="font-mono text-lg tabular-nums">
-                {bid === null ? "—" : `${bid.toFixed(2)} / ${ask?.toFixed(2) ?? "—"}`}
+                {limit === null ? "—" : limit.toFixed(2)}
                 <span className="ms-2 text-xs text-muted-foreground">
-                  {call
-                    ? `зафиксировано в ${formatClockWithSeconds(call.checkedAt)} UTC`
-                    : "котировка обновляется каждые 5 секунд"}
+                  стакан {bid === null ? "—" : bid.toFixed(2)} /{" "}
+                  {ask?.toFixed(2) ?? "—"} · комиссии нет
+                </span>
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3 rounded-xl border border-warn/30 bg-warn-soft/40 px-4 py-3">
+            <ShieldAlert className="size-4 shrink-0 text-warn-ink" />
+            <div className="min-w-0">
+              <p className="text-[11px] font-medium tracking-wider text-warn-ink uppercase">
+                Если пересечь спред тейкером
+              </p>
+              <p className="font-mono text-lg tabular-nums">
+                {ask === null ? "—" : ask.toFixed(2)}
+                <span className="ms-2 text-xs text-muted-foreground">
+                  комиссия 7%×(1−цена) = {fee === null ? "—" : `${(fee * 100).toFixed(2)}%`} от
+                  ставки — весь перевес съедается
                 </span>
               </p>
             </div>
