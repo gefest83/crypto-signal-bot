@@ -6,6 +6,7 @@ import {
   LIMIT_MAX,
   LIMIT_MIN,
   MIN_STAKE_USD,
+  MARKET_INTERVAL_MIN,
   STAKE_OPTIONS_USD,
   TRADE_FEE_RATE,
   decideMakerAction,
@@ -21,14 +22,21 @@ import {
 
 describe("рабочий диапазон лимита", () => {
   it("широкий, а не одна точка — иначе это подгонка", () => {
-    expect(LIMIT_MIN).toBeLessThan(0.3);
-    expect(LIMIT_MAX).toBeGreaterThan(0.5);
+    expect(LIMIT_MIN).toBeLessThan(0.45);
+    expect(LIMIT_MAX).toBeGreaterThan(0.55);
     expect(DEFAULT_LIMIT).toBeGreaterThan(LIMIT_MIN);
     expect(DEFAULT_LIMIT).toBeLessThan(LIMIT_MAX);
   });
 
   it("лимит по умолчанию — тот, что walk-forward выбирал каждую неделю", () => {
-    expect(DEFAULT_LIMIT).toBe(0.35);
+    // 5m markets moved the optimum up from 0.35 to 0.50: the exit fires less
+    // often on shorter rounds, so the limit has to be where a caught exit pays
+    // more and a missed one costs more.
+    expect(DEFAULT_LIMIT).toBe(0.5);
+  });
+
+  it("рынок именно 5-минутный — ради частоты сделок", () => {
+    expect(MARKET_INTERVAL_MIN).toBe(5);
   });
 });
 
@@ -134,17 +142,15 @@ describe("сколько должны выигрывать удержавшие�
     expect(withFee).toBeCloseTo(withoutFee * 1.35, 10);
     expect(withFee).toBeLessThan(planMakerTrade("up", 0.35).survivorWinRate);
   });
-});
-
-describe("живое решение", () => {
+});  describe("живое решение", () => {
   it("цена выше лимита — заявка стоит в стакане", () => {
-    const d = decideMakerAction({ price: 0.5, holding: false });
+    const d = decideMakerAction({ price: 0.62, holding: false });
     expect(d.action).toBe("rest");
     expect(d).toHaveProperty("limit", DEFAULT_LIMIT);
   });
 
   it("цена на лимите или ниже — не встаём впритык к спреду", () => {
-    expect(decideMakerAction({ price: 0.34, holding: false }).action).toBe("wait");
+    expect(decideMakerAction({ price: 0.42, holding: false }).action).toBe("wait");
     expect(decideMakerAction({ price: DEFAULT_LIMIT, holding: false }).action).toBe("wait");
   });
 
@@ -161,14 +167,14 @@ describe("живое решение", () => {
   });
 
   it("возврат выше лимита тоже считается выходом", () => {
-    expect(decideMakerAction({ price: 0.42, holding: true }).action).toBe("exit");
+    expect(decideMakerAction({ price: 0.62, holding: true }).action).toBe("exit");
   });
 
   it("у каждого решения есть объяснение", () => {
     for (const input of [
-      { price: 0.5, holding: false },
-      { price: 0.2, holding: false },
-      { price: 0.35, holding: true },
+      { price: 0.62, holding: false },
+      { price: 0.42, holding: false },
+      { price: DEFAULT_LIMIT, holding: true },
       { price: 0.1, holding: true },
     ]) {
       expect(decideMakerAction(input).reason.length).toBeGreaterThan(10);

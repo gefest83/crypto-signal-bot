@@ -36,8 +36,8 @@ const PHASE_HINT: Record<string, string> = {
  * Order size, in real USDC.
  *
  * Polymarket sells dollars, not shares, and the smallest order the books take
- * is $1. At the 0.35 limit that is 2.86 shares, so a $1 stake is not a small
- * bet — it is the full $1 at risk if the round goes against us, and it is the
+ * is $1. At the 0.50 limit that is 2 shares, so a $1 stake is not a small bet
+ * — it is the full $1 at risk if the round goes against us, and it is the
  * number every P&L on this screen is measured against.
  */
 function StakeSwitch({
@@ -115,7 +115,7 @@ function AssetSwitch({
         );
       })}
       <span className="ms-auto hidden text-[11px] text-muted-foreground sm:block">
-        Лимит 0.35 · вход без комиссии · выход в безубыток
+        Лимит {DEFAULT_LIMIT.toFixed(2)} · вход без тейкерской комиссии · выход в безубыток
       </span>
     </div>
   );
@@ -125,7 +125,7 @@ export default function Dashboard() {
   const { user, signOut } = useAuth();
   const navigate = useNavigate();
   const [asset, setAsset] = useState<PmAsset>("btc");
-  const [stake, setStake] = useState<StakeUsd>(1);
+  const [stake, setStake] = useState<StakeUsd>(MIN_STAKE_USD);
   const maker = useMakerSession(DEFAULT_LIMIT, stake);
 
   const handleSignOut = async () => {
@@ -141,7 +141,7 @@ export default function Dashboard() {
           <div className="min-w-0">
             <p className="text-sm leading-tight font-semibold tracking-tight">Maker Exit</p>
             <p className="truncate text-[11px] leading-tight text-muted-foreground">
-              Вход без комиссии · выход в безубыток · 15-минутные раунды
+              Вход без тейкерской комиссии · выход в безубыток · 5-минутные раунды
             </p>
           </div>
           <div className="ms-auto flex items-center gap-3">

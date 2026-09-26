@@ -1,12 +1,12 @@
 /**
- * Real 15-minute "Up or Down" rounds on Polymarket.
+ * Real 5-minute "Up or Down" rounds on Polymarket.
  *
  * The engine used to invent its own contract price, which is why the journal
  * showed a large simulated profit and a large real loss. Everything below is
  * read from Polymarket's public Gamma API, so the price the console shows is
  * the price the contract can actually be bought at.
  *
- * Market slug pattern: `<asset>-updown-15m-<intervalStartUnixSeconds>`,
+ * Market slug pattern: `<asset>-updown-5m-<intervalStartUnixSeconds>`,
  * resolved against Chainlink BTC/USD / ETH/USD.
  *
  * The two outcome tokens are exact complements, so the DOWN side is derived
@@ -19,8 +19,8 @@ import { api } from "./_generated/api";
 import { action } from "./_generated/server";
 
 const GAMMA = "https://gamma-api.polymarket.com";
-/** 15-minute rounds. */
-const ROUND_S = 900;
+/** 5-minute rounds. Shorter rounds are where this strategy makes money. */
+const ROUND_S = 300;
 
 /** Polymarket's published outcome for a market slug, or null while unresolved. */
 export async function settledUp(slug: string): Promise<boolean | null> {
@@ -48,7 +48,7 @@ export function pmRoundStart(nowMs: number): number {
 }
 
 export function pmSlug(asset: PmAsset, startSec: number): string {
-  return `${asset}-updown-15m-${startSec}`;
+  return `${asset}-updown-5m-${startSec}`;
 }
 
 export type PmRound = {

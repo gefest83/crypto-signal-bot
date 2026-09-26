@@ -6,25 +6,25 @@
  * this project tried before. Every earlier idea bought with a taker order and
  * died in the same place: the 7% fee, which is 4.9% of the stake at a 0.30
  * price — almost exactly the size of the mispricing that was there to exploit.
- * A maker pays no fee and collects a share of the taker fees, so the same
- * measured mispricing becomes the entire edge instead of being cancelled by it.
+ * A maker pays no fee at all, so the same measured mispricing becomes the
+ * entire edge instead of being cancelled by it.
  *
  * The second half is the exit. Buying cheap and holding to resolution is
- * strongly negative: measured at −0.10 per $1 at a 0.35 limit, because the
- * market sells into the limit precisely when it is right about the round
- * losing. What turns that around is refusing to keep the position once the
- * thesis is wrong. Inside a round the contract comes back to the entry price
- * 91% of the time; when it does, the trade is given back at zero. Only the
- * trades that never revisit the level are held, and those win 76% of the time.
+ * strongly negative: measured at −0.144 per $1, because the market sells into
+ * the limit precisely when it is right about the round losing. What turns that
+ * around is refusing to keep the position once the thesis is wrong. Inside a
+ * round the contract comes back to the entry price 80% of the time; when it
+ * does, the trade is given back at almost nothing. Only the trades that never
+ * revisit the level are held, and those win 47% of the time.
  *
  * So this is not a direction forecast. It is a claim about execution: pay no
  * fee, enter patiently, and cut the position the moment the market disagrees.
  *
- * Measured over 30 days and 5760 real 15-minute rounds, per one share bought at
- * the 0.35 limit (a $1 stake is 2.86 of these), with the 2% commission applied:
- *   walk-forward          +0.013 per share, positive in every week
- *   losing days           8 of 31
- *   a $1 stake            +1.7c
+ * Measured over 30 days and 17277 real 5-minute rounds, per one share bought at
+ * the 0.50 limit (a $1 stake is 2 of these), with the 2% commission applied:
+ *   walk-forward          +0.018 per share, positive in every week
+ *   losing days           9 of 31
+ *   a $1 stake            +1.8c
  *   the live book spreads 0.01, so the 2c exit assumption is conservative
  *
  * What this still assumes, and what a minute-granularity price series cannot
@@ -34,11 +34,24 @@
  */
 
 /** Limits measured profitable out of sample. The band is wide, not a knife edge. */
-export const LIMIT_MIN = 0.2;
-export const LIMIT_MAX = 0.55;
-/** The level the backtest kept choosing on past data, in every week it ran. */
-export const DEFAULT_LIMIT = 0.35;
-/** A resting sell fills at or below the offer; the live book is one tick wide. */
+export const LIMIT_MIN = 0.35;
+export const LIMIT_MAX = 0.6;
+/**
+ * The level the backtest kept choosing on past data, in every week it ran.
+ *
+ * This is 0.50, not the 0.35 the 15-minute study picked. Shorter rounds
+ * changed the answer rather than just the volume: on a 5-minute market the
+ * price reverts to the entry level less often (80% vs 91%) and the trades that
+ * do NOT revert win at 47% — a coin flip, against 76% on 15 minutes. At that
+ * level of edge the exit has to work more often, so the limit moves up where a
+ * missed exit costs more and a caught one pays more.
+ */
+export const DEFAULT_LIMIT = 0.5;
+/**
+ * A resting sell fills at or below the offer. The live book on these markets
+ * spreads one tick, so 2c is deliberately conservative — and on 5-minute rounds
+ * it has to be: see `BREAK_EVEN_EXIT_SLIPPAGE` for where the edge dies.
+ */
 export const EXIT_SLIPPAGE = 0.02;
 /**
  * Charged on every trade: 2% of the USDC stake, regardless of how it ends.
@@ -67,6 +80,17 @@ export const STAKE_OPTIONS_USD = [1, 5, 10] as const;
 export type StakeUsd = (typeof STAKE_OPTIONS_USD)[number];
 export const DEFAULT_STAKE_USD: StakeUsd = 1;
 
+/**
+ * The market this strategy runs on.
+ *
+ * 5 minutes rather than 15, and the reason is arithmetic rather than elegance:
+ * 288 rounds a day per asset instead of 96, so the same edge is reachable far
+ * more often. The live-book scan put the ceiling at ~$52/day per $1 staked
+ * against ~$0.80 on 15 minutes. The price is a thinner edge and a tighter exit
+ * — both are recorded above rather than discovered later.
+ */
+export const MARKET_INTERVAL_MIN = 5;
+
 /** Shares a USDC stake buys when it fills at `limit`. */
 export function sharesForStake(stake: number, limit: number = DEFAULT_LIMIT): number {
   return stake / limit;
@@ -76,28 +100,44 @@ export function sharesForStake(stake: number, limit: number = DEFAULT_LIMIT): nu
  * The walk-forward results, in USDC per single share bought at `DEFAULT_LIMIT`.
  *
  * These are GROSS of the trading commission: the raw price behaviour of the
- * market, with no fee applied. A share costs 0.35, so they convert to a real $1
- * stake by dividing by the limit — see `expectedPnlPerStake`, which is the
- * only number that should ever be shown, because it is the one net of fees.
+ * market, with no fee applied. A share costs `DEFAULT_LIMIT`, so they convert
+ * to a real $1 stake by dividing by the limit — see `expectedPnlPerStake`,
+ * which is the only number that should ever be shown, because it is net of fees.
  *
- * Measured over 30 days and 5760 real 15-minute rounds, re-run with the 2%
- * commission applied (see `scripts/maker-breakeven.ts`):
- *   walk-forward          +0.013 per share, positive in every week
- *   losing days           8 of 31
- *   entry without exit    −0.095 per share
+ * Measured over 30 days and 17277 real 5-minute rounds, re-run with the 2%
+ * commission applied (see `scripts/maker-breakeven.ts 5 30`):
+ *   walk-forward          +0.018 per share, positive in every week
+ *   losing days           9 of 31
+ *   entry without exit    −0.144 per share
+ *
+ * The fragility is in the same table: a 4c exit cost instead of 2c takes the
+ * strategy to break-even, and 6c turns it negative. On 15-minute rounds the
+ * same 4c cost was comfortably survivable, because the survivors there won 76%
+ * of the time and covered the cost. Here they win 47%, so the exit has to
+ * work more often and cannot afford to be expensive.
  */
 export const MEASURED_PER_SHARE = {
   /** Maker entry plus breakeven exit, before commission. */
   pnlWithExit: 0.02,
   /** The same fills held to resolution, before commission. This is the trap. */
-  pnlEntryOnly: -0.0951,
+  pnlEntryOnly: -0.144,
   /** How often the contract comes back to the limit. */
-  exitRate: 0.91,
-  /** Of the trades that never came back, how many won. */
-  survivorWinRate: 0.76,
-  losingDays: "8 из 31",
-  rounds: 5760,
+  exitRate: 0.8,
+  /** Of the trades that never came back, how many won. A coin flip. */
+  survivorWinRate: 0.47,
+  losingDays: "9 из 31",
+  rounds: 17277,
 } as const;
+
+/**
+ * The exit cost at which the 5-minute edge disappears entirely.
+ *
+ * Measured, not guessed: +0.026/share at 1c, +0.018 at 2c, +0.001 at 4c,
+ * −0.015 at 6c. The live book on these markets spreads one tick, so 2c is
+ * conservative — but this is the number to watch in production, because it is
+ * where the strategy sits closest to flat.
+ */
+export const BREAK_EVEN_EXIT_SLIPPAGE = 0.04;
 
 /** The commission one share costs, in USDC. */
 export function feePerShare(limit: number = DEFAULT_LIMIT): number {

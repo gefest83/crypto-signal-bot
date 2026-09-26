@@ -23,7 +23,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { DEFAULT_CONFIG, evaluateSignal } from "../src/lib/strategy/engine";
 import type { Candle, MarketSymbol } from "../src/lib/market/types";
 
 const GAMMA = "https://gamma-api.polymarket.com";
@@ -269,125 +268,17 @@ function analyse(rounds: Round[], entrySeconds: number) {
 const SYMBOL_OF: Record<Asset, MarketSymbol> = { btc: "BTCUSDT", eth: "ETHUSDT" };
 
 /**
- * The real test: take the live engine's call at t+60s and pay the REAL
- * Polymarket price for that side. This mirrors the journal's two columns —
- * simulated P&L (the engine's own formula price) next to real P&L.
+ * Dead since the candle engine was removed from the strategy.
+ *
+ * The maker-exit rules do not consume a directional call, so nothing in this
+ * script needs the engine. Rather than resurrect an engine whose only output
+ * was a losing signal, the command is reported as gone — and its body removed
+ * entirely, because leaving it in kept a broken import at the top of the file
+ * that stopped the whole collector from running. That is how a 5-minute study
+ * ended up unable to collect 5-minute data at all.
  */
-function runEngineJoin(rounds: Round[], binanceDays: number) {
-  for (const asset of ASSETS) {
-    if (!loadBinance(SYMBOL_OF[asset], binanceDays)) return;
-  }
-
-  let signals = 0;
-  let wins = 0;
-  let realPnl = 0;
-  let simPnl = 0;
-  let costSum = 0;
-  let simCostSum = 0;
-  const rows: { cost: number; sim: number; payoff: number }[] = [];
-
-  for (const round of rounds) {
-    if (round.upWon === null) continue;
-    const symbol = SYMBOL_OF[round.asset];
-    const lookup = indexes.get(symbol);
-    const candles = candlesOf.get(symbol);
-    if (!lookup || !candles) continue;
-    const i = lookup.get(round.t0 * 1000);
-    if (i === undefined || i < 30 || i + INTERVAL >= candles.length) continue;
-
-    const entry = priceAt(round, ENTRY_MS / 1000);
-    if (entry === null) continue;
-
-    // The candle engine only publishes inside its own window, so the window is
-    // moved to the same 20% mark the entry uses.
-    const readout = evaluateSignal({
-      symbol,
-      candles: candles.slice(Math.max(0, i - 199), i + 1),
-      price: candles[i].close,
-      now: round.t0 * 1000 + ENTRY_MS,
-      config: {
-        ...DEFAULT_CONFIG,
-        minEntryElapsedMs: ENTRY_MS,
-        entryWindowMs: ENTRY_MS + 60_000,
-        entryCutoffMs: ENTRY_MS + 120_000,
-      },
-    });
-    if (!readout || readout.direction === "stand-aside") continue;
-
-    const settled: "up" | "down" = round.upWon ? "up" : "down";
-    const payoff = readout.direction === settled ? 1 : 0;
-    const realCost = readout.direction === "up" ? entry : 1 - entry;
-    const simCost = readout.maxEntryPrice;
-
-    signals += 1;
-    wins += payoff;
-    realPnl += payoff - realCost;
-    simPnl += payoff - simCost;
-    costSum += realCost;
-    simCostSum += simCost;
-    rows.push({ cost: realCost, sim: simCost, payoff });
-  }
-
-  if (signals === 0) {
-    console.log("\nengine produced no call that lines up with the Polymarket rounds");
-    return;
-  }
-  console.log(`\n=== ${INTERVAL}m: свечной движок на t+${ENTRY_MS / 1000}s против реальных цен ===`);
-  console.log(`signals          ${signals}`);
-  console.log(`hit rate         ${((wins / signals) * 100).toFixed(1)}%`);
-  console.log(`avg real price   ${(costSum / signals).toFixed(3)}`);
-  console.log(`avg sim price    ${(simCostSum / signals).toFixed(3)}`);
-  const sd = Math.sqrt(
-    rows.reduce((a, r) => a + (r.payoff - r.cost - realPnl / signals) ** 2, 0) / signals,
-  );
-  console.log(`sim P&L ($1)     ${(simPnl / signals).toFixed(3)}/trade  total ${simPnl.toFixed(2)}`);
-  console.log(
-    `REAL P&L ($1)    ${(realPnl / signals).toFixed(3)}/trade  total ${realPnl.toFixed(2)}`,
-  );
-  console.log(
-    `             ± se ${(sd / Math.sqrt(signals)).toFixed(3)}  (edge is significant only if |mean| > 2·se)`,
-  );
-
-  console.log("\nreal price bucket   n    hit rate   avg cost   EV/trade");
-  for (const [lo, hi] of [
-    [0, 0.5],
-    [0.5, 0.6],
-    [0.6, 0.7],
-    [0.7, 0.8],
-    [0.8, 1.01],
-  ]) {
-    const bucket = rows.filter((r) => r.cost >= lo && r.cost < hi);
-    if (bucket.length === 0) continue;
-    const ev = bucket.reduce((a, r) => a + r.payoff - r.cost, 0) / bucket.length;
-    const win = bucket.filter((r) => r.payoff === 1).length / bucket.length;
-    console.log(
-      [
-        `${lo.toFixed(2)}-${hi.toFixed(2)}`.padEnd(17),
-        String(bucket.length).padStart(4),
-        `${(win * 100).toFixed(1)}%`.padStart(10),
-        (bucket.reduce((a, r) => a + r.cost, 0) / bucket.length).toFixed(3).padStart(10),
-        `${ev >= 0 ? "+" : ""}${ev.toFixed(3)}`.padStart(10),
-      ].join("   "),
-    );
-  }
-}
-
-const indexes = new Map<MarketSymbol, Map<number, number>>();
-const candlesOf = new Map<MarketSymbol, Candle[]>();
-
-/** Load the Binance 1m cache produced by scripts/backtest-strategy.ts. */
-function loadBinance(symbol: MarketSymbol, days: number): boolean {
-  const file = join(CACHE_DIR, `${symbol}-${days}d.json`);
-  if (!existsSync(file)) {
-    console.log(`missing Binance cache ${file}`);
-    return false;
-  }
-  const candles = JSON.parse(readFileSync(file, "utf8")) as Candle[];
-  const index = new Map<number, number>();
-  candles.forEach((candle, i) => index.set(candle.openTime, i));
-  indexes.set(symbol, index);
-  candlesOf.set(symbol, candles);
-  return true;
+function runEngineJoin(): void {
+  console.log("\n  the 'engine' command was removed with the candle engine — nothing calls it");
 }
 
 async function main() {
@@ -406,7 +297,7 @@ async function main() {
   }
 
   if (command === "engine") {
-    runEngineJoin(rounds, 30);
+    runEngineJoin();
     return;
   }
 

@@ -3,6 +3,7 @@ import { pmRoundStart, settledUp, type PmAsset, type PmRound } from "../convex/p
 import {
   DEFAULT_LIMIT,
   DEFAULT_STAKE_USD,
+  MARKET_INTERVAL_MIN,
   stakePnl,
   type Side,
 } from "@/lib/strategy/maker-exit";
@@ -12,7 +13,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 /** How often the real Polymarket book is re-read. */
 const BOOK_POLL_MS = 5_000;
 /** Longest answer Polymarket takes before the next round replaces the market. */
-const ROUND_MS = 15 * 60_000;
+const ROUND_MS = MARKET_INTERVAL_MIN * 60_000;
 const ASSETS: PmAsset[] = ["btc", "eth"];
 const SYMBOL_OF_ASSET: Record<PmAsset, string> = { btc: "BTCUSDT", eth: "ETHUSDT" };
 

@@ -2,7 +2,10 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import type { MakerPhase, MakerSession } from "@/hooks/use-maker-session";
+import { DEFAULT_LIMIT, MARKET_INTERVAL_MIN } from "@/lib/strategy/maker-exit";
 import { ArrowDown, ArrowUp, CircleDot, Loader2, Target, X } from "lucide-react";
+
+const ROUND_MS = MARKET_INTERVAL_MIN * 60_000;
 
 /** Where the contract would have to travel for each transition to fire. */
 const STEPS: { phase: MakerPhase; label: string; hint: string }[] = [
@@ -39,13 +42,13 @@ export function MakerRound({
   end: number;
 }) {
   const remaining = Math.max(0, end - now);
-  const progress = 1 - remaining / (15 * 60_000);
+  const progress = 1 - remaining / ROUND_MS;
   const active = session ? (ACTIVE_INDEX[session.phase] ?? 0) : 0;
   const up = session?.side === "up";
   const SideIcon = up ? ArrowUp : ArrowDown;
 
   // Where our limit sits inside the 0-1 contract, as a bar position.
-  const limitPct = ((session?.limit ?? 0.35) / 1) * 100;
+  const limitPct = (session?.limit ?? DEFAULT_LIMIT) * 100;
   const askPct = session?.ask != null ? session.ask * 100 : null;
   const bidPct = session?.bid != null ? session.bid * 100 : null;
 

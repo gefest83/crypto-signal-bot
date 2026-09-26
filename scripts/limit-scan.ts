@@ -36,16 +36,28 @@ const STAKE = 1;
  * evPerShare / limit − 0.02. The commission is subtracted on the STAKE, which
  * is why the numbers fall faster than the raw table does.
  */
-const BAND: { limit: number; evPerShare: number }[] = [
-  { limit: 0.2, evPerShare: 0.008 },
-  { limit: 0.25, evPerShare: 0.007 },
-  { limit: 0.3, evPerShare: 0.01 },
-  { limit: 0.35, evPerShare: 0.013 },
-  { limit: 0.4, evPerShare: 0.01 },
-  { limit: 0.45, evPerShare: 0.011 },
-  { limit: 0.5, evPerShare: 0.006 },
-  { limit: 0.55, evPerShare: -0.001 },
-];
+const BAND: { limit: number; evPerShare: number }[] =
+  INTERVAL === 5
+    ? [
+        { limit: 0.3, evPerShare: 0.002 },
+        { limit: 0.35, evPerShare: 0.008 },
+        { limit: 0.4, evPerShare: 0.015 },
+        { limit: 0.45, evPerShare: 0.017 },
+        { limit: 0.5, evPerShare: 0.019 },
+        { limit: 0.55, evPerShare: 0.017 },
+        { limit: 0.6, evPerShare: 0.013 },
+        { limit: 0.65, evPerShare: 0.008 },
+      ]
+    : [
+        { limit: 0.2, evPerShare: 0.008 },
+        { limit: 0.25, evPerShare: 0.007 },
+        { limit: 0.3, evPerShare: 0.01 },
+        { limit: 0.35, evPerShare: 0.013 },
+        { limit: 0.4, evPerShare: 0.01 },
+        { limit: 0.45, evPerShare: 0.011 },
+        { limit: 0.5, evPerShare: 0.006 },
+        { limit: 0.55, evPerShare: -0.001 },
+      ];
 
 /** Net EV on a $1 stake at a given limit, after the 2% fee. */
 function evPerStake(limit: number, evPerShare: number): number {
@@ -180,21 +192,41 @@ console.log(`\n=== is ANY limit in the band actually fillable? · ${INTERVAL}m U
 console.log(`watching the live book for ${WATCH_S}s. A $${STAKE} order needs BOTH a $1 to rest`);
 console.log(`at the limit and a seller crossing to it. One without the other is worthless.\n`);
 
-const rounds: Record<string, Round | null> = {
-  btc: await currentRound("btc"),
-  eth: await currentRound("eth"),
-};
+// The 5-minute round turns over three times faster than the 15-minute one, so
+// resolving it once at the top and reusing it would measure a market that has
+// already been replaced. Re-resolve whenever the boundary moves.
+const t0 = Date.now();
+let polls = 0;
+let rounds: Record<string, Round | null> = {};
+let roundStart = 0;
+
+async function ensureRound(): Promise<void> {
+  const start = Math.floor(Date.now() / 1000 / ROUND_S) * ROUND_S;
+  if (start === roundStart) return;
+  roundStart = start;
+  rounds = {
+    btc: await currentRound("btc"),
+    eth: await currentRound("eth"),
+  };
+}
+
+await ensureRound();
 if (!rounds.btc || !rounds.eth) {
   console.log("  could not resolve the current rounds");
   process.exit(1);
 }
 
-const t0 = Date.now();
-let polls = 0;
+const slugs = new Set<string>();
+const seenLimit = new Set<number>();
 
 while (Date.now() - t0 < WATCH_S * 1000) {
+  await ensureRound();
   for (const [asset, round] of Object.entries(rounds)) {
     if (!round) continue;
+    if (!slugs.has(round.slug)) {
+      slugs.add(round.slug);
+      if (slugs.size > 1) console.log(`  --- new round: ${round.slug}`);
+    }
     for (const [side, tokenId] of [
       ["UP", round.up],
       ["DOWN", round.down],
@@ -222,7 +254,13 @@ while (Date.now() - t0 < WATCH_S * 1000) {
 const pct = (n: number, d: number) => (d ? (n / d) * 100 : 0);
 const rpsPerDay = (INTERVAL === 15 ? 96 : 2880) * 2; // rounds per day × 2 assets
 
-console.log(`\n=== ${polls} polls · ${rounds.btc.slug} ===`);
+/**
+ * How much of each round is spent watching, which caps how often a resting
+ * quote can act. On a 5-minute round there is far less time than on 15.
+ */
+const roundSecs = INTERVAL * 60;
+
+console.log(`\n=== ${polls} polls over ${slugs.size} rounds ===`);
 console.log(
   "\n  limit  asset  side    hit%   avgAsk  depth$   sweep$   EV/$1",
 );
@@ -239,7 +277,8 @@ for (const { limit, evPerShare } of BAND) {
     const t = tallies.get(`${asset}-${side}-${limit}`)!;
     if (!t.reads) continue;
     const hit = pct(t.hit, t.reads);
-    if (hit === 0) continue;
+    if (hit === 0 && seenLimit.has(limit)) continue;
+    seenLimit.add(limit);
     const avgDepth = t.depthReads ? t.depthSum / t.depthReads : 0;
     console.log(
       `  ${limit.toFixed(2)}   ${asset.toUpperCase().padEnd(4)}  ${side.padEnd(4)}  ` +
@@ -286,11 +325,20 @@ for (const { limit, evPerShare } of BAND) {
 }
 
 const best = ranked.sort((a, b) => b.perDay - a.perDay)[0];
-console.log(`\n  best of the band: limit ${best.limit.toFixed(2)} at ${best.perDay >= 0 ? "+" : "−"}$${Math.abs(best.perDay).toFixed(2)}/day`);
+if (best) {
+  console.log(
+    `\n  best of the band: limit ${best.limit.toFixed(2)} at ` +
+      `${best.perDay >= 0 ? "+" : "−"}$${Math.abs(best.perDay).toFixed(2)}/day`,
+  );
+} else {
+  console.log("\n  no limit in the band was reachable in this sample — round too short to judge");
+}
 
 console.log(
   `\n  read: this counts a hit whenever the ask trades at or below the limit, which\n` +
     `  is the price crossing our resting bid. The remaining risk is queue position\n` +
     `  at the moment of the move, and whether we were resting at all — neither is\n` +
-    `  observable from a book snapshot. Treat $/day as a ceiling.`,
+    `  observable from a book snapshot. Treat $/day as a ceiling.\n` +
+    `  A ${INTERVAL}m round is only ${roundSecs}s long, so a limit set after the\n` +
+    `  first few seconds of the round has very little time left to work.`,
 );
