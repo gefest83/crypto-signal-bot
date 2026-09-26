@@ -2,6 +2,7 @@ import { LogoDropdown } from "@/components/LogoDropdown";
 import { MakerEdge } from "@/components/maker/MakerEdge";
 import { MakerJournal } from "@/components/maker/MakerJournal";
 import { MakerRound } from "@/components/maker/MakerRound";
+import { MakerStats } from "@/components/maker/MakerStats";
 import { MakerRules } from "@/components/maker/MakerRules";
 import { PaperPanel } from "@/components/maker/PaperPanel";
 import { Button } from "@/components/ui/button";
@@ -133,7 +134,7 @@ export default function Dashboard() {
   const [asset, setAsset] = useState<PmAsset>("btc");
   const [stake, setStake] = useState<StakeUsd>(5);
   const maker = useMakerSession(DEFAULT_LIMIT, stake);
-  const paper = usePaperSession(DEFAULT_LIMIT, stake, DEFAULT_PAPER);
+  const paper = usePaperSession(stake, DEFAULT_PAPER);
 
   const handleSignOut = async () => {
     await signOut();
@@ -180,6 +181,8 @@ export default function Dashboard() {
           end={maker.end}
         />
 
+        <MakerStats stake={stake} />
+
         <div className="grid gap-5 lg:grid-cols-2 lg:items-start">
           <MakerEdge stake={stake} />
           <MakerRules />
@@ -187,10 +190,9 @@ export default function Dashboard() {
 
         <PaperPanel
           sessions={paper.sessions}
-          journal={paper.journal}
+          perMarket={paper.perMarket}
           totals={paper.totals}
           now={paper.now}
-          end={paper.end}
           penetrationTicks={paper.settings.penetrationTicks}
         />
 

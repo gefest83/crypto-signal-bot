@@ -92,8 +92,78 @@ export const DEFAULT_STAKE_USD: StakeUsd = 5;
  * more often. The live-book scan put the ceiling at ~$52/day per $1 staked
  * against ~$0.80 on 15 minutes. The price is a thinner edge and a tighter exit
  * — both are recorded above rather than discovered later.
+ *
+ * The console now runs BOTH, because they fail differently. A 15-minute round
+ * gives the price longer to revert, so the exit fires 91% of the time instead
+ * of 80% and the survivors that must be held win 76% instead of 47%. But its
+ * edge is thinner per share and it dies EARLIER under an expensive exit — flat
+ * at 3c, against 4c on 5m. 5m has more trades and survives longer; 15m has
+ * better trades and fewer. Averaging them would hide both facts, so they are
+ * measured separately and reported side by side.
  */
 export const MARKET_INTERVAL_MIN = 5;
+
+/** The limit each interval trades at. Read the book before quoting anything else. */
+export const PM_LIMITS: Record<5 | 15, number> = { 5: 0.5, 15: 0.35 };
+
+/** Both intervals, with the limit each was measured at and its own evidence. */
+export type MarketProfile = {
+  interval: 5 | 15;
+  label: string;
+  limit: number;
+  /** Walk-forward P&L per share, net of the 2% commission. */
+  evPerShare: number;
+  /** Gross of commission, which is what the price actually did. */
+  grossPerShare: number;
+  /** Entry held to resolution. Negative on both — that is the trap. */
+  entryOnly: number;
+  exitRate: number;
+  survivorWinRate: number;
+  losingDays: string;
+  rounds: number;
+  /** Exit cost at which this interval stops paying. */
+  breakEvenSlippage: number;
+};
+
+export const MARKET_PROFILES: Record<5 | 15, MarketProfile> = {
+  5: {
+    interval: 5,
+    label: "5m",
+    limit: 0.5,
+    evPerShare: 0.018,
+    grossPerShare: 0.02,
+    entryOnly: -0.144,
+    exitRate: 0.8,
+    survivorWinRate: 0.47,
+    losingDays: "9 из 31",
+    rounds: 17277,
+    // +0.026 at 1c, +0.018 at 2c, +0.001 at 4c, −0.015 at 6c.
+    breakEvenSlippage: 0.04,
+  },
+  15: {
+    interval: 15,
+    label: "15m",
+    limit: 0.35,
+    evPerShare: 0.013,
+    grossPerShare: 0.02,
+    entryOnly: -0.102,
+    // 15m reverts more reliably (91%) and the trades that never revert win 76%
+    // rather than 47%. That is a genuinely better trade — and it still dies
+    // under an expensive exit sooner, because the edge sits in the reversion
+    // happening often rather than in the price of getting out.
+    exitRate: 0.91,
+    survivorWinRate: 0.76,
+    losingDays: "8 из 31",
+    rounds: 5760,
+    // +0.022 at 1c, +0.013 at 2c, −0.009 at 4c → flat somewhere near 3c.
+    breakEvenSlippage: 0.03,
+  },
+};
+
+/** Round length in seconds for an interval. */
+export function roundSeconds(interval: 5 | 15): number {
+  return interval * 60;
+}
 
 /** Shares a USDC stake buys when it fills at `limit`. */
 export function sharesForStake(stake: number, limit: number = DEFAULT_LIMIT): number {
@@ -134,14 +204,19 @@ export const MEASURED_PER_SHARE = {
 } as const;
 
 /**
- * The exit cost at which the 5-minute edge disappears entirely.
+ * The exit cost at which the edge disappears entirely, per interval.
  *
- * Measured, not guessed: +0.026/share at 1c, +0.018 at 2c, +0.001 at 4c,
- * −0.015 at 6c. The live book on these markets spreads one tick, so 2c is
- * conservative — but this is the number to watch in production, because it is
- * where the strategy sits closest to flat.
+ * Measured, not guessed. On 5m: +0.026/share at 1c, +0.018 at 2c, +0.001 at
+ * 4c, −0.015 at 6c. On 15m: +0.022 at 1c, +0.013 at 2c, −0.009 at 4c. The
+ * live book spreads one tick, so 2c is conservative — but these are the numbers
+ * to watch in production, because they say how much room the exit has before
+ * the strategy is flat. 15m dies EARLIER, which is the opposite of the naive
+ * expectation: its edge comes from reversion happening reliably, so an
+ * expensive exit takes that away faster.
  */
-export const BREAK_EVEN_EXIT_SLIPPAGE = 0.04;
+export function breakEvenSlippage(interval: 5 | 15): number {
+  return MARKET_PROFILES[interval].breakEvenSlippage;
+}
 
 /** The commission one share costs, in USDC. */
 export function feePerShare(limit: number = DEFAULT_LIMIT): number {

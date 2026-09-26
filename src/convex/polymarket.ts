@@ -1,12 +1,12 @@
 /**
- * Real 5-minute "Up or Down" rounds on Polymarket.
+ * Real "Up or Down" rounds on Polymarket, at 5 and 15 minutes.
  *
  * The engine used to invent its own contract price, which is why the journal
  * showed a large simulated profit and a large real loss. Everything below is
  * read from Polymarket's public Gamma API, so the price the console shows is
  * the price the contract can actually be bought at.
  *
- * Market slug pattern: `<asset>-updown-5m-<intervalStartUnixSeconds>`,
+ * Market slug pattern: `<asset>-updown-<5|15>m-<intervalStartUnixSeconds>`,
  * resolved against Chainlink BTC/USD / ETH/USD.
  *
  * The two outcome tokens are exact complements, so the DOWN side is derived
@@ -19,8 +19,20 @@ import { api } from "./_generated/api";
 import { action } from "./_generated/server";
 
 const GAMMA = "https://gamma-api.polymarket.com";
-/** 5-minute rounds. Shorter rounds are where this strategy makes money. */
-const ROUND_S = 300;
+/**
+ * Rounds this console runs, in minutes. Both are listed by Polymarket and both
+ * were measured: 5m is the frequent one with a thin edge, 15m is the slower one
+ * with a thicker edge that survives a 4c exit. They behave differently enough
+ * to be worth separating rather than averaging.
+ */
+export const PM_INTERVALS = [5, 15] as const;
+export type PmInterval = (typeof PM_INTERVALS)[number];
+
+/** The limit each interval was measured at. 5m moved up to 0.50; 15m sat at 0.35. */
+export const PM_LIMIT_OF: Record<PmInterval, number> = { 5: 0.5, 15: 0.35 };
+
+/** A market we can rest a limit on: one asset at one interval. */
+export type PmMarket = `${PmAsset}-${PmInterval}`;
 
 /** Polymarket's published outcome for a market slug, or null while unresolved. */
 export async function settledUp(slug: string): Promise<boolean | null> {
@@ -43,12 +55,12 @@ export const PM_ASSETS = ["btc", "eth"] as const;
 export type PmAsset = (typeof PM_ASSETS)[number];
 
 /** Interval start of the round that contains `now`, in unix seconds. */
-export function pmRoundStart(nowMs: number): number {
-  return Math.floor(nowMs / 1000 / ROUND_S) * ROUND_S;
+export function pmRoundStart(nowMs: number, interval: PmInterval = 5): number {
+  return Math.floor(nowMs / 1000 / (interval * 60)) * (interval * 60);
 }
 
-export function pmSlug(asset: PmAsset, startSec: number): string {
-  return `${asset}-updown-5m-${startSec}`;
+export function pmSlug(asset: PmAsset, startSec: number, interval: PmInterval = 5): string {
+  return `${asset}-updown-${interval}m-${startSec}`;
 }
 
 export type PmRound = {
@@ -121,9 +133,12 @@ export const fetchRound = action({
   args: {
     asset: v.union(v.literal("btc"), v.literal("eth")),
     start: v.number(),
+    interval: v.optional(v.union(v.literal(5), v.literal(15))),
   },
   handler: async (_ctx, args): Promise<PmRound | null> => {
-    const slug = pmSlug(args.asset, args.start);
+    const interval = (args.interval ?? 5) as PmInterval;
+    const roundS = interval * 60;
+    const slug = pmSlug(args.asset, args.start, interval);
     const response = await fetch(`${GAMMA}/events?slug=${slug}`);
     if (!response.ok) return null;
     const events = (await response.json()) as Record<string, unknown>[];
@@ -171,7 +186,7 @@ export const fetchRound = action({
     return {
       asset: args.asset,
       start: args.start,
-      end: args.start + ROUND_S,
+      end: args.start + roundS,
       slug,
       title: String(event.title ?? slug),
       upTokenId,

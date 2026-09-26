@@ -5,8 +5,10 @@ import {
   EXIT_SLIPPAGE,
   LIMIT_MAX,
   LIMIT_MIN,
+  MARKET_PROFILES,
   MIN_ORDER_SHARES,
   MIN_STAKE_USD,
+  PM_LIMITS,
   MARKET_INTERVAL_MIN,
   STAKE_OPTIONS_USD,
   TRADE_FEE_RATE,
@@ -16,6 +18,7 @@ import {
   makerPnl,
   planMakerTrade,
   requiredSurvivorWinRate,
+  roundSeconds,
   sharesForStake,
   stakeOutcomes,
   stakePnl,
@@ -38,6 +41,44 @@ describe("рабочий диапазон лимита", () => {
 
   it("рынок именно 5-минутный — ради частоты сделок", () => {
     expect(MARKET_INTERVAL_MIN).toBe(5);
+  });
+});
+
+describe("профили двух рынков не взаимозаменяемы", () => {
+  it("у каждого интервала свой лимит — усреднение сломало бы вход", () => {
+    expect(PM_LIMITS[5]).toBe(0.5);
+    expect(PM_LIMITS[15]).toBe(0.35);
+  });
+
+  it("15m перевес тоньше на шару, но обнуляется раньше — до 3ц на 4ц", () => {
+    // Первая версия этого теста утверждала обратное, и это было неверно: я
+    // написал в UI «15m переживает дорогой выход лучше», не проверив цифрами.
+    // Измерено: 15m обнуляется на 3ц, 5m держится до 4ц. 15m тоньше
+    // ПОТОМУ ЧТО у него перевес сидит в структуре возврата, а у 5m — в частоте.
+    const five = MARKET_PROFILES[5];
+    const fifteen = MARKET_PROFILES[15];
+    expect(fifteen.breakEvenSlippage).toBeLessThan(five.breakEvenSlippage);
+    expect(five.evPerShare).toBeGreaterThan(fifteen.evPerShare);
+  });
+
+  it("5m держится на выходе, потому что удержавшиеся выигрывают как монетка", () => {
+    // 47% — это не навык. Если бы на 5m удержавшиеся выигрывали 76%, как на
+    // 15m, весь риск был бы не в цене выхода, а где-то ещё.
+    expect(MARKET_PROFILES[5].survivorWinRate).toBeLessThan(0.5);
+    expect(MARKET_PROFILES[15].survivorWinRate).toBeGreaterThan(0.7);
+  });
+
+  it("на обоих рынках вход без выхода отрицателен", () => {
+    // Это единственное, что обязано быть верно везде. Если на каком-то
+    // интервале вход сам по себе плюсовой, весь разговор про выход не нужен.
+    for (const interval of [5, 15] as const) {
+      expect(MARKET_PROFILES[interval].entryOnly).toBeLessThan(0);
+    }
+  });
+
+  it("длина раунда выводится из интервала, а не задаётся руками", () => {
+    expect(roundSeconds(5)).toBe(300);
+    expect(roundSeconds(15)).toBe(900);
   });
 });
 
