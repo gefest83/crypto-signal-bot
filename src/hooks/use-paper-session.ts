@@ -99,6 +99,23 @@ export type PaperSession = {
   stake: number;
   ask: number | null;
   bid: number | null;
+  /**
+   * Whether the order has actually been RESTING in the book yet.
+   *
+   * This flag exists because two different questions were being asked with one
+   * condition, and they are mutually exclusive. A resting buy needs the ask to
+   * sit ABOVE our limit; a fill needs the ask to have fallen BELOW it. Asking
+   * both of the same tick means asking for `ask > 0.50` and `ask <= 0.49` at
+   * once, which is unsatisfiable — so the fill test could never pass and the
+   * console reported zero trades forever while looking completely healthy.
+   *
+   * The order is armed the first tick the ask is above the limit, and stays
+   * armed for the rest of the round. From then on a fill is a pure penetration
+   * test, with no re-validation of whether the quote is still allowed to rest.
+   * That is also the honest sequence: an order that was never in the book
+   * cannot be filled by the market moving through it.
+   */
+  rested: boolean;
   shares: number | null;
   openedAfterMs: number | null;
   upWon: boolean | null;
@@ -210,6 +227,7 @@ function sameSession(a: PaperSession, b: PaperSession): boolean {
     a.stake === b.stake &&
     a.ask === b.ask &&
     a.bid === b.bid &&
+    a.rested === b.rested &&
     a.shares === b.shares &&
     a.openedAfterMs === b.openedAfterMs &&
     a.upWon === b.upWon &&
@@ -236,6 +254,7 @@ const empty = (
   stake,
   ask: null,
   bid: null,
+  rested: false,
   shares: null,
   openedAfterMs: null,
   upWon: null,
@@ -400,13 +419,30 @@ export function usePaperSession(
         const held = positions[market.key];
 
         if (session.state === "quoting") {
-          // A limit at or above the ask is not a resting order. Quoting it
-          // would manufacture an instant fill, and the round would round-trip
-          // for a pure commission loss with no market event involved.
-          const restable = canRestBuy(session.limit, session.ask);
-          const check: FillCheck = restable.filled
+          // Arming the order and filling it are DIFFERENT events, and they
+          // need different conditions. This conflation is why the console
+          // reported zero trades for ten hours straight: `canRestBuy` demands
+          // ask > limit while `checkBuyFill` demands ask <= limit - tick, so
+          // asking both of the same snapshot asked for a price that cannot
+          // exist. The fill test was unreachable by construction.
+          //
+          // The order arms on the first tick where the ask is above the limit —
+          // that is the tick it is genuinely resting in the book. Once armed
+          // it stays armed, and a fill is then a pure penetration test on every
+          // later tick, which is the only condition a real resting order
+          // experiences. An order that was never resting cannot be filled.
+          const armed = session.rested || canRestBuy(session.limit, session.ask).filled;
+          if (armed) session.rested = true;
+
+          const check: FillCheck = armed
             ? checkBuyFill(session.limit, book, settings)
-            : { filled: false, reason: restable.reason };
+            : {
+                filled: false,
+                reason:
+                  session.ask == null
+                    ? "Ждём котировку ask."
+                    : canRestBuy(session.limit, session.ask).reason,
+              };
           if (check.filled) {
             const order = {
               id: `${market.key}-${session.roundStart}`,
@@ -427,11 +463,12 @@ export function usePaperSession(
               session.openedAfterMs = now - session.roundStart;
               session.note = `Набито. ${check.reason}. ${position.shares.toFixed(2)} шар на $${session.stake}.`;
             }
+          } else if (session.ask == null) {
+            session.note = "Ждём котировку ask.";
+          } else if (session.rested) {
+            session.note = `Заявка ${session.limit.toFixed(2)} в стакане. ${check.reason}.`;
           } else {
-            session.note =
-              session.ask == null
-                ? "Ждём котировку ask."
-                : `Заявка ${session.limit.toFixed(2)} в стакане. ${check.reason}.`;
+            session.note = `Ждём, когда ask уйдёт выше лимита ${session.limit.toFixed(2)}. ${check.reason}`;
           }
         } else if (session.state === "filled" && held) {
           session.state = "closing";
