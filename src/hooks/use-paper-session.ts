@@ -309,7 +309,26 @@ export function usePaperSession(
   const fetchRound = useAction(api.polymarket.fetchRound);
   const logSignal = useMutation(api.signals.logSignal);
   const recordRound = useMutation(api.paper.recordRound);
+  const archiveQuote = useMutation(api.paper.archiveQuote);
   const inFlight = useRef(false);
+
+  /**
+   * Archive the executable book while the round is still live.
+   *
+   * A mid sampled 90 seconds into a round says nothing about whether an entry
+   * at +20s was reachable, and a resolved market's book is empty — measured, 99
+   * bids and zero asks — so nothing about the past can be reconstructed. The
+   * window below brackets the RetMag decision point and nothing else; outside
+   * it the archive would be describing moments nobody could trade.
+   *
+   * The console already re-reads the book every few seconds, so this costs no
+   * extra network traffic. Writes are fire-and-forget: a quote is supporting
+   * evidence, and it must never be able to stall the trading loop.
+   */
+  const archiveWindow = useMemo(() => ({ from: 12_000, to: 45_000 }), []);
+  // The effect itself lives below, next to `starts`, which it reads.
+  void archiveQuote;
+
 
   /**
    * Restore the tally from the database on mount.
@@ -433,6 +452,29 @@ export function usePaperSession(
     return map;
   }, [now]);
   const bucket = Math.floor(now / BOOK_POLL_MS);
+
+  useEffect(() => {
+    for (const market of MARKETS) {
+      const start = starts[market.key];
+      const round = rounds[market.key];
+      if (!start || !round || !round.upAsk) continue;
+      const elapsed = now - start;
+      if (elapsed < archiveWindow.from || elapsed > archiveWindow.to) continue;
+      void archiveQuote({
+        roundStart: Math.floor(start / 1000),
+        asset: market.asset,
+        interval: market.interval,
+        t: elapsed,
+        upBid: round.upBid ?? undefined,
+        upAsk: round.upAsk ?? undefined,
+        downBid: round.downBid ?? undefined,
+        downAsk: round.downAsk ?? undefined,
+        priceSource: round.priceSource,
+      }).catch((error: unknown) => {
+        console.warn("[paper] quote archive failed", error);
+      });
+    }
+  }, [archiveQuote, archiveWindow, now, rounds, starts]);
 
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 1000);

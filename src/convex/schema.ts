@@ -139,6 +139,37 @@ const schema = defineSchema(
       note: v.optional(v.string()),
       createdAt: v.number(),
     }).index("by_user_market_round", ["userId", "marketKey", "roundStart"]),
+
+    // Executable quotes, archived FORWARD, one row per poll.
+    //
+    // A backtest on real money needs the price that could actually have been
+    // paid, and that price does not exist in the past: a resolved market's book
+    // is empty (measured — 99 bids, zero asks), and the trade endpoints return
+    // nothing at all for these tokens. So the only honest source is a book we
+    // watch while it is live, which is what this table is.
+    //
+    // These rows are deliberately NOT per-user. A quote is a fact about the
+    // market, identical for everyone, and duplicating it per account would
+    // make the archive describe how many people were watching rather than what
+    // the market did.
+    //
+    // The window is the decision point: a RetMag entry is evaluated 20 seconds
+    // into the round, so a mid sampled 90 seconds in says nothing about
+    // whether the entry was reachable.
+    pmQuotes: defineTable({
+      /** Round this quote belongs to, unix seconds. */
+      roundStart: v.number(),
+      asset: v.union(v.literal("btc"), v.literal("eth")),
+      interval: v.union(v.literal(5), v.literal(15)),
+      /** Milliseconds since the round started. */
+      t: v.number(),
+      upBid: v.optional(v.number()),
+      upAsk: v.optional(v.number()),
+      downBid: v.optional(v.number()),
+      downAsk: v.optional(v.number()),
+      priceSource: v.optional(v.string()),
+      createdAt: v.number(),
+    }).index("by_round", ["roundStart"]),
   },
   {
     schemaValidation: false,
