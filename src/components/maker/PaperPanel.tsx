@@ -237,6 +237,14 @@ export function PaperPanel({
             Обновлено {new Date(now).toLocaleTimeString("ru-RU")}.
           </p>
         )}
+
+        {totals.rounds > 0 && (
+          <p className="text-center text-xs text-muted-foreground">
+            История сохранена в базе — перезагрузка страницы её не обнуляет. Каждый закрытый раунд
+            записывается сразу, а повторная запись того же раунда обновляет его, а не добавляет
+            копию, поэтому P&L не задваивается.
+          </p>
+        )}
       </CardContent>
     </Card>
   );

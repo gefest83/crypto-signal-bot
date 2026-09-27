@@ -102,6 +102,43 @@ const schema = defineSchema(
     })
       .index("by_user_window", ["userId", "windowStart"])
       .index("by_user_symbol_window", ["userId", "symbol", "windowStart"]),
+
+    // Paper console: every ROUND the console watched, closed or not.
+    //
+    // The `signals` table above only stores the entry of a trade that produced
+    // one. A maker console lives or dies on what happened AFTER the entry, so
+    // the P&L, the exit price and the rounds that never filled all have to
+    // survive a page reload — otherwise every refresh silently rewrites the
+    // track record, and a strategy that has been bleeding for hours looks
+    // brand new the moment the tab is closed.
+    //
+    // Rows are keyed by the round itself (`marketKey` + `roundStart`), which
+    // makes the write idempotent: a re-poll, a retried grade or a StrictMode
+    // double-invoke all collapse onto the same row instead of double-counting.
+    paperRounds: defineTable({
+      userId: v.id("users"),
+      /** One of btc-5, eth-5, btc-15, eth-15. */
+      marketKey: v.string(),
+      asset: v.union(v.literal("btc"), v.literal("eth")),
+      interval: v.union(v.literal(5), v.literal(15)),
+      /** Start of the round this row describes, in ms. */
+      roundStart: v.number(),
+      /** Whether the order was genuinely resting in the book for this round. */
+      quoted: v.boolean(),
+      /** True when the round produced a filled position. */
+      filled: v.optional(v.boolean()),
+      /** True when the position was given back before the round resolved. */
+      exited: v.optional(v.boolean()),
+      /** Realised P&L in USDC. 0 on a round that never filled. */
+      pnl: v.optional(v.number()),
+      entryPrice: v.optional(v.number()),
+      exitPrice: v.optional(v.number()),
+      stake: v.optional(v.number()),
+      shares: v.optional(v.number()),
+      upWon: v.optional(v.boolean()),
+      note: v.optional(v.string()),
+      createdAt: v.number(),
+    }).index("by_user_market_round", ["userId", "marketKey", "roundStart"]),
   },
   {
     schemaValidation: false,

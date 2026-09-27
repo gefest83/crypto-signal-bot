@@ -26,7 +26,7 @@ import {
   type PaperPosition,
   type PaperSettings,
 } from "@/lib/strategy/paper";
-import { useAction, useMutation } from "convex/react";
+import { useAction, useMutation, useQuery } from "convex/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 /** How often the real book is re-read. */
@@ -299,7 +299,55 @@ export function usePaperSession(
 
   const fetchRound = useAction(api.polymarket.fetchRound);
   const logSignal = useMutation(api.signals.logSignal);
+  const recordRound = useMutation(api.paper.recordRound);
   const inFlight = useRef(false);
+
+  /**
+   * Restore the tally from the database on mount.
+   *
+   * The console used to hold every closed round in React state, so closing or
+   * refreshing the tab reported zero trades and $0.00 — a track record that
+   * resets on F5 cannot be used to judge a strategy. The stored rounds are
+   * replayed into the same `closed`/`liveness` shapes the live path produces,
+   * so everything downstream keeps reading one structure.
+   *
+   * The replay runs once. Re-running it on every render would append the same
+   * history again, which is the mirror image of the bug it fixes.
+   */
+  const storedRounds = useQuery(api.paper.listRounds, {});
+  const restored = useRef(false);
+  useEffect(() => {
+    if (restored.current || !storedRounds) return;
+    restored.current = true;
+    if (storedRounds.length === 0) return;
+
+    const byMarket: Record<string, { pnl: number; exited: boolean }[]> = {};
+    const live: Record<string, { rounds: number; quoted: number }> = {};
+    for (const row of storedRounds) {
+      const bucket = (byMarket[row.marketKey] ??= []);
+      bucket.push({ pnl: row.pnl ?? 0, exited: row.exited ?? false });
+      const tally = (live[row.marketKey] ??= { rounds: 0, quoted: 0 });
+      tally.rounds += 1;
+      if (row.quoted) tally.quoted += 1;
+    }
+    setClosed((current) => {
+      const merged: Record<string, { pnl: number; exited: boolean }[]> = { ...byMarket };
+      for (const [key, rows] of Object.entries(current)) {
+        merged[key] = [...(merged[key] ?? []), ...rows];
+      }
+      return merged;
+    });
+    setLiveness((current) => {
+      const merged: Record<string, { rounds: number; quoted: number }> = { ...current };
+      for (const [key, tally] of Object.entries(live)) {
+        merged[key] = {
+          rounds: (current[key]?.rounds ?? 0) + tally.rounds,
+          quoted: (current[key]?.quoted ?? 0) + tally.quoted,
+        };
+      }
+      return merged;
+    });
+  }, [storedRounds]);
 
   /**
    * Rounds that have ended but are not graded yet.
@@ -539,6 +587,31 @@ export function usePaperSession(
         setClosed((c) => ({ ...c, [key]: [...(c[key] ?? []), { pnl: 0, exited: false }] }));
       }
 
+      // Persist the round BEFORE the journal write below, and on every path
+      // including a round that never filled. The missed rounds are the evidence
+      // that the console was watching, and without them a day of trading leaves
+      // no trace at all. Keyed on the round, so a retried grade updates the row
+      // it already wrote instead of adding a second copy of the same P&L.
+      const recorded = position ?? null;
+      await recordRound({
+        marketKey: key,
+        asset: market.asset,
+        interval: market.interval,
+        roundStart: session.roundStart,
+        quoted: session.side !== null,
+        filled: session.state === "filled" || session.state === "closed",
+        exited: session.state === "closed",
+        pnl: session.pnl ?? 0,
+        entryPrice: recorded?.entryPrice,
+        exitPrice: recorded?.exitPrice,
+        stake: session.stake,
+        shares: session.shares ?? undefined,
+        upWon,
+        note: session.note,
+      }).catch((error: unknown) => {
+        console.warn("[paper] could not persist the round", error);
+      });
+
       if (session.side) {
         const tokenId = session.side === "up" ? round?.upTokenId : round?.downTokenId;
         await logSignal({
@@ -561,7 +634,7 @@ export function usePaperSession(
       }
       return true;
     },
-    [logSignal, now, settings.penetrationTicks],
+    [logSignal, recordRound, now, settings.penetrationTicks],
   );
 
   /**
