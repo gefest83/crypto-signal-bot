@@ -464,6 +464,7 @@ export function usePaperSession(
    */
   const counted = useRef<Record<string, boolean>>({});
   useEffect(() => {
+    if (pending.current.length === 0) return;
     for (const item of pending.current) {
       const id = `${item.key}@${item.session.roundStart}`;
       if (counted.current[id]) continue;
@@ -489,10 +490,13 @@ export function usePaperSession(
         if (!ok) stillWaiting.push(item);
       }
       if (cancelled) return;
+      const settledCount = pending.current.length - stillWaiting.length;
       pending.current = stillWaiting;
-      // Nudge the effect so a result that lands late is picked up without
-      // waiting for the next book poll.
-      setDrainTick((t) => t + 1);
+      // Nudge ONLY when something was actually graded. Nudging unconditionally
+      // re-runs this effect, which re-reads an unpublished round, which nudges
+      // again — an unbounded render loop that hammers Gamma and freezes the tab.
+      // An unpublished result is instead picked up by the next `now` tick.
+      if (settledCount > 0) setDrainTick((t) => t + 1);
     })();
     return () => {
       cancelled = true;
