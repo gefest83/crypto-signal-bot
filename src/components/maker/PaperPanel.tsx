@@ -48,12 +48,14 @@ export function PaperPanel({
   perMarket,
   totals,
   now,
+  storedRounds,
   penetrationTicks,
 }: {
   sessions: Partial<Record<string, PaperSession>>;
   perMarket: MarketStats[];
   totals: PaperTotals;
   now: number;
+  storedRounds: number;
   penetrationTicks: number;
 }) {
   return (
@@ -240,9 +242,9 @@ export function PaperPanel({
 
         {totals.rounds > 0 && (
           <p className="text-center text-xs text-muted-foreground">
-            История сохранена в базе — перезагрузка страницы её не обнуляет. Каждый закрытый раунд
-            записывается сразу, а повторная запись того же раунда обновляет его, а не добавляет
-            копию, поэтому P&L не задваивается.
+            Загружено из базы {storedRounds} раундов. История переживает перезагрузку: каждый раунд
+            пишется сразу, а повторная запись того же раунда обновляет его, а не добавляет копию —
+            поэтому P&L не задваивается.
           </p>
         )}
       </CardContent>

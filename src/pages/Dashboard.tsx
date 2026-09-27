@@ -247,6 +247,7 @@ export default function Dashboard() {
           perMarket={paper.perMarket}
           totals={paper.totals}
           now={paper.now}
+          storedRounds={paper.storedRounds}
           penetrationTicks={paper.settings.penetrationTicks}
         />
 

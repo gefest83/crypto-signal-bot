@@ -189,6 +189,15 @@ export type PaperConsole = {
   totals: PaperTotals;
   now: number;
   settings: PaperSettings;
+  /**
+   * Rounds read back from the database on mount.
+   *
+   * This exists to make the restore verifiable instead of assumed. "0 trades"
+   * used to mean two completely different things — nothing was ever traded, or
+   * the history failed to come back — and they looked identical. A non-zero
+   * number here after a reload is the difference between the two.
+   */
+  storedRounds: number;
 };
 
 /**
@@ -315,6 +324,53 @@ export function usePaperSession(
    * history again, which is the mirror image of the bug it fixes.
    */
   const storedRounds = useQuery(api.paper.listRounds, {});
+
+  /**
+   * Persist one round the moment anything about it becomes a fact.
+   *
+   * The first version wrote to the database only from `closeRound`, which runs
+   * when a round is GRADED — and grading is the step that depends on Polymarket
+   * publishing a result, on the queue surviving its own backoff, and on the tab
+   * still being open. An exit by limit, on the other hand, is booked in memory
+   * the instant it happens. So a trade that was real, closed and shown on
+   * screen could still vanish on reload if the tab closed before the round was
+   * graded. That is the whole bug: the number on screen and the number on disk
+   * were updated at different moments, and only one of them was durable.
+   *
+   * Writing at every bookable event removes the gap. The write is keyed on the
+   * round itself, so a provisional row at rollover, a corrected row at the fill
+   * and a final row at settlement all land on the SAME row instead of counting
+   * as three separate trades.
+   */
+  const persistRound = useCallback(
+    async (
+      market: (typeof MARKETS)[number],
+      session: PaperSession,
+      position: PaperPosition | null,
+      upWon?: boolean,
+    ) => {
+      await recordRound({
+        marketKey: market.key,
+        asset: market.asset,
+        interval: market.interval,
+        roundStart: session.roundStart,
+        quoted: session.side !== null,
+        filled: session.state === "filled" || session.state === "closed",
+        exited: session.state === "closed",
+        pnl: session.pnl ?? 0,
+        entryPrice: position?.entryPrice,
+        exitPrice: position?.exitPrice,
+        stake: session.stake,
+        shares: session.shares ?? undefined,
+        upWon,
+        note: session.note,
+      }).catch((error: unknown) => {
+        console.warn("[paper] could not persist the round", error);
+      });
+    },
+    [recordRound],
+  );
+
   const restored = useRef(false);
   useEffect(() => {
     if (restored.current || !storedRounds) return;
@@ -450,6 +506,11 @@ export function usePaperSession(
               if (pending.current.length > MAX_PENDING) {
                 pending.current.splice(0, pending.current.length - MAX_PENDING);
               }
+              // A round that ended without a fill is a fact the moment the round
+              // ends, and it does not need Polymarket to have settled anything.
+              // Recording it here means the "watched but did not trade" evidence
+              // survives even if grading never gets to run.
+              void persistRound(market, existing, positions[market.key] ?? null);
             }
           }
           next[market.key] = empty(market.key, market.asset, market.interval, start, limit, stake);
@@ -510,6 +571,10 @@ export function usePaperSession(
               session.shares = position.shares;
               session.openedAfterMs = now - session.roundStart;
               session.note = `Набито. ${check.reason}. ${position.shares.toFixed(2)} шар на $${session.stake}.`;
+              // Record the fill now, not at the round's end. A position that
+              // was filled and then lost to a reload is the most expensive kind
+              // of lost trade: the entry was real and the money was committed.
+              void persistRound(market, session, position);
             }
           } else if (session.ask == null) {
             session.note = "Ждём котировку ask.";
@@ -532,6 +597,10 @@ export function usePaperSession(
               ...c,
               [market.key]: [...(c[market.key] ?? []), { pnl: settled.pnl ?? 0, exited: true }],
             }));
+            // Durable the instant the exit is real. Waiting for the round to be
+            // graded leaves the trade living only in this tab's memory, which is
+            // exactly what losing it on reload looks like from the outside.
+            void persistRound(market, session, settled);
           } else {
             session.note = `Держим ${held.shares.toFixed(2)} шар. ${exit.reason}.`;
           }
@@ -551,7 +620,7 @@ export function usePaperSession(
       }
     }
     if (changed) setSessions(next);
-  }, [rounds, now, starts, stake, settings, positions, sessions]);
+  }, [rounds, now, starts, stake, settings, positions, sessions, persistRound]);
 
   /**
    * Grade one finished round on Polymarket's own published result.
@@ -560,6 +629,22 @@ export function usePaperSession(
    * the round queued. The position travels with the item rather than being
    * read from live state, because by grading time the market has already
    * rolled over to a new round and the live position is no longer this one.
+   */
+  /**
+   * Persist one round, the moment anything about it becomes a fact.
+   *
+   * The first version wrote to the database only from `closeRound`, which runs
+   * when a round is GRADED — and grading is the step that depends on Polymarket
+   * publishing a result, on the queue surviving its own backoff, and on the tab
+   * still being open. An exit by limit, on the other hand, is booked in memory
+   * the instant it happens. So a trade that was real, closed, and shown on
+   * screen could still vanish on reload if the tab closed before the round was
+   * graded. That is the whole bug: the number on screen and the number on disk
+   * were updated at different moments, and only one of them was durable.
+   *
+   * Writing at every bookable event removes the gap. The write is keyed on the
+   * round, so a provisional row at rollover, a corrected row at exit and a
+   * final row at settlement all land on the SAME row instead of three trades.
    */
   const closeRound = useCallback(
     async (item: (typeof pending.current)[number]): Promise<boolean> => {
@@ -587,30 +672,11 @@ export function usePaperSession(
         setClosed((c) => ({ ...c, [key]: [...(c[key] ?? []), { pnl: 0, exited: false }] }));
       }
 
-      // Persist the round BEFORE the journal write below, and on every path
+      // Persist the round BEFORE the journal write below, on every path
       // including a round that never filled. The missed rounds are the evidence
       // that the console was watching, and without them a day of trading leaves
-      // no trace at all. Keyed on the round, so a retried grade updates the row
-      // it already wrote instead of adding a second copy of the same P&L.
-      const recorded = position ?? null;
-      await recordRound({
-        marketKey: key,
-        asset: market.asset,
-        interval: market.interval,
-        roundStart: session.roundStart,
-        quoted: session.side !== null,
-        filled: session.state === "filled" || session.state === "closed",
-        exited: session.state === "closed",
-        pnl: session.pnl ?? 0,
-        entryPrice: recorded?.entryPrice,
-        exitPrice: recorded?.exitPrice,
-        stake: session.stake,
-        shares: session.shares ?? undefined,
-        upWon,
-        note: session.note,
-      }).catch((error: unknown) => {
-        console.warn("[paper] could not persist the round", error);
-      });
+      // no trace at all.
+      await persistRound(market, session, position ?? null, upWon);
 
       if (session.side) {
         const tokenId = session.side === "up" ? round?.upTokenId : round?.downTokenId;
@@ -634,7 +700,7 @@ export function usePaperSession(
       }
       return true;
     },
-    [logSignal, recordRound, now, settings.penetrationTicks],
+    [logSignal, persistRound, now, settings.penetrationTicks],
   );
 
   /**
@@ -756,6 +822,7 @@ export function usePaperSession(
     totals,
     now,
     settings,
+    storedRounds: storedRounds?.length ?? 0,
   };
 }
 
