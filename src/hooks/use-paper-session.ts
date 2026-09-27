@@ -3,6 +3,7 @@ import {
   PM_INTERVALS,
   PM_LIMIT_OF,
   pmRoundStart,
+  pmSlug,
   settledUp,
   type PmAsset,
   type PmInterval,
@@ -225,9 +226,32 @@ export function usePaperSession(
   const [positions, setPositions] = useState<Partial<Record<MarketKey, PaperPosition>>>({});
   const [closed, setClosed] = useState<Record<MarketKey, { pnl: number; exited: boolean }[]>>({});
 
+  /**
+   * Liveness counters. Without these, a console that is working correctly and
+   * a console that has silently stopped polling look identical from the
+   * outside: both show zero trades. Counting the rounds that went by, and the
+   * share of them where the order was genuinely resting, tells the two apart.
+   */
+  const [liveness, setLiveness] = useState<Record<string, { rounds: number; quoted: number }>>({});
+  /** Bumped to re-drive the grading queue when a result lands late. */
+  const [drainTick, setDrainTick] = useState(0);
+
   const fetchRound = useAction(api.polymarket.fetchRound);
   const logSignal = useMutation(api.signals.logSignal);
   const inFlight = useRef(false);
+
+  /**
+   * Rounds that have ended but are not graded yet.
+   *
+   * A round cannot be graded the moment it rolls over: Polymarket publishes the
+   * result a little later, and until it does, `settledUp` returns null. Grading
+   * once and giving up would silently drop the round, which is exactly how a
+   * console ends up reporting zero trades forever while looking perfectly
+   * healthy. So the finished round waits here until the result is real.
+   */
+  const pending = useRef<
+    { key: MarketKey; session: PaperSession; position: PaperPosition | null; round: PmRound | null }[]
+  >([]);
 
   // Each interval has its own clock: a 15m round is still running while the
   // 5m one has already rolled over twice.
@@ -283,6 +307,22 @@ export function usePaperSession(
         const limit = PM_LIMIT_OF[market.interval];
         const existing = previous[market.key];
         if (!existing || existing.roundStart !== start) {
+          // The round rolled over. The finished session is about to be thrown
+          // away, so it goes to the grading queue first — keyed by its own
+          // start, which makes a double push from StrictMode a no-op.
+          if (existing) {
+            const queued = pending.current.some(
+              (item) => item.key === market.key && item.session.roundStart === existing.roundStart,
+            );
+            if (!queued) {
+              pending.current.push({
+                key: market.key,
+                session: existing,
+                position: positions[market.key] ?? null,
+                round: rounds[market.key] ?? null,
+              });
+            }
+          }
           next[market.key] = empty(market.key, market.asset, market.interval, start, limit, stake);
           continue;
         }
@@ -355,39 +395,47 @@ export function usePaperSession(
     });
   }, [rounds, now, starts, stake, settings, positions]);
 
-  /** Grade a finished round on Polymarket's own published result. */
+  /**
+   * Grade one finished round on Polymarket's own published result.
+   *
+   * Returns false while the result is still unpublished, and the caller keeps
+   * the round queued. The position travels with the item rather than being
+   * read from live state, because by grading time the market has already
+   * rolled over to a new round and the live position is no longer this one.
+   */
   const closeRound = useCallback(
-    async (
-      market: (typeof MARKETS)[number],
-      session: PaperSession,
-      round: PmRound | null | undefined,
-    ) => {
-      const upWon = await settledUp(round?.slug ?? "");
-      if (upWon === null) return;
-      const won = session.side === "up" ? upWon : !upWon;
-      const open = positions[market.key];
-      let pnl: number | null = null;
-      if (open) {
+    async (item: (typeof pending.current)[number]): Promise<boolean> => {
+      const { key, session, position, round } = item;
+      const market = MARKETS.find((m) => m.key === key);
+      if (!market) return true;
+      // The round's own slug, derived from its start: the book has already
+      // moved on, so `rounds[key]` is the wrong market by now.
+      const slug = pmSlug(market.asset, Math.floor(session.roundStart / 1000), market.interval);
+      const upWon = await settledUp(slug);
+      if (upWon === null) return false;
+
+      const open = position;
+      if (open && open.status === "open") {
+        const won = session.side === "up" ? upWon : !upWon;
         const settled = settlePosition(open, won, now, TRADE_FEE_RATE);
-        setPositions((p) => ({ ...p, [market.key]: settled }));
-        pnl = settled.pnl;
+        setPositions((p) => ({ ...p, [key]: settled }));
         setClosed((c) => ({
           ...c,
-          [market.key]: [...(c[market.key] ?? []), { pnl: settled.pnl ?? 0, exited: false }],
+          [key]: [...(c[key] ?? []), { pnl: settled.pnl ?? 0, exited: session.state === "closed" }],
         }));
+      } else if (session.state === "closed") {
+        // Already booked by the exit path; do not count it twice.
       } else {
-        setClosed((c) => ({
-          ...c,
-          [market.key]: [...(c[market.key] ?? []), { pnl: 0, exited: false }],
-        }));
+        setClosed((c) => ({ ...c, [key]: [...(c[key] ?? []), { pnl: 0, exited: false }] }));
       }
+
       if (session.side) {
         const tokenId = session.side === "up" ? round?.upTokenId : round?.downTokenId;
         await logSignal({
           symbol: SYMBOL_OF_ASSET[market.asset],
           windowStart: session.roundStart,
           windowEnd: session.roundStart + market.interval * 60_000,
-          marketSlug: round?.slug ?? undefined,
+          marketSlug: slug,
           tokenId: tokenId ?? undefined,
           direction: session.side,
           entryLimitPrice: session.limit,
@@ -401,39 +449,55 @@ export function usePaperSession(
           console.warn("[paper] could not journal the trade", error);
         });
       }
+      return true;
     },
-    [logSignal, positions, now, settings.penetrationTicks],
+    [logSignal, now, settings.penetrationTicks],
   );
 
   /**
-   * Liveness counters. Without these, a console that is working correctly and
-   * a console that has silently stopped polling look identical from the
-   * outside: both show zero trades. Counting the rounds that went by, and the
-   * share of them where the order was genuinely resting, tells the two apart.
+   * Drain the grading queue, and count each round exactly once.
+   *
+   * The liveness tally is bumped when the round is QUEUED, not when it grades
+   * cleanly, because it answers "is the console watching?" — and the console is
+   * watching whether or not Polymarket has published the result yet. Keyed by
+   * the round's own start so a retry cannot inflate it.
    */
-  const [liveness, setLiveness] = useState<Record<string, { rounds: number; quoted: number }>>({});
-
-  const graded = useRef<Record<string, number>>({});
+  const counted = useRef<Record<string, boolean>>({});
   useEffect(() => {
-    for (const market of MARKETS) {
-      const start = starts[market.key] ?? 0;
-      const roundMs = market.interval * 60_000;
-      if (now - start < roundMs) continue;
-      if (graded.current[market.key] === start) continue;
-      graded.current[market.key] = start;
-      const session = sessions[market.key];
-      if (!session || session.roundStart !== start) continue;
+    for (const item of pending.current) {
+      const id = `${item.key}@${item.session.roundStart}`;
+      if (counted.current[id]) continue;
+      counted.current[id] = true;
       setLiveness((l) => ({
         ...l,
-        [market.key]: {
-          rounds: (l[market.key]?.rounds ?? 0) + 1,
-          quoted: (l[market.key]?.quoted ?? 0) + (session.side ? 1 : 0),
+        [item.key]: {
+          rounds: (l[item.key]?.rounds ?? 0) + 1,
+          quoted: (l[item.key]?.quoted ?? 0) + (item.session.side ? 1 : 0),
         },
       }));
-      if (session.state === "closed" || session.state === "held") continue;
-      void closeRound(market, session, rounds[market.key]);
     }
-  }, [now, starts, sessions, rounds, closeRound]);
+  });
+
+  useEffect(() => {
+    if (pending.current.length === 0) return;
+    let cancelled = false;
+    void (async () => {
+      const stillWaiting: typeof pending.current = [];
+      for (const item of pending.current) {
+        if (cancelled) return;
+        const ok = await closeRound(item);
+        if (!ok) stillWaiting.push(item);
+      }
+      if (cancelled) return;
+      pending.current = stillWaiting;
+      // Nudge the effect so a result that lands late is picked up without
+      // waiting for the next book poll.
+      setDrainTick((t) => t + 1);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [closeRound, now, drainTick]);
 
   // Per-market statistics, then the sum. Kept as two separate things on
   // purpose: a total that mixes a thick 15m edge with a thin 5m one hides
