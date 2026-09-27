@@ -195,6 +195,30 @@ function quoteableSide(upAsk: number | null, limit: number): "up" | "down" | nul
   return downAsk > limit + 1e-9 ? "down" : null;
 }
 
+/**
+ * Whether anything a human could see actually changed.
+ *
+ * The console polls the book every few seconds, and most of those polls return
+ * the same numbers. Committing a fresh object on each one turns the poll into
+ * a render loop, so the state is only written when it genuinely differs.
+ */
+function sameSession(a: PaperSession, b: PaperSession): boolean {
+  return (
+    a.roundStart === b.roundStart &&
+    a.state === b.state &&
+    a.side === b.side &&
+    a.limit === b.limit &&
+    a.stake === b.stake &&
+    a.ask === b.ask &&
+    a.bid === b.bid &&
+    a.shares === b.shares &&
+    a.openedAfterMs === b.openedAfterMs &&
+    a.upWon === b.upWon &&
+    a.pnl === b.pnl &&
+    a.note === b.note
+  );
+}
+
 const empty = (
   key: string,
   asset: PmAsset,
@@ -322,14 +346,21 @@ export function usePaperSession(
   }, [fetchRound, bucket, starts]);
 
   // The state machine, one pass per poll, per market.
+  //
+  // This used to hand a brand new object to `setSessions` on every single
+  // pass, while `positions` sat in the dependency list. New object means a
+  // changed dependency, which means the effect runs again, which allocates
+  // another object — a render loop with no exit, and a white page. The state is
+  // therefore committed ONLY when it actually differs, which is also the honest
+  // behaviour: a market that is quietly sitting on a resting order has not
+  // changed since the last poll and should not cost a render.
   useEffect(() => {
-    setSessions((previous) => {
-      const next: Partial<Record<MarketKey, PaperSession>> = {};
-      for (const market of MARKETS) {
+    const next: Partial<Record<MarketKey, PaperSession>> = {};
+    for (const market of MARKETS) {
         const round = rounds[market.key];
         const start = starts[market.key] ?? 0;
         const limit = PM_LIMIT_OF[market.interval];
-        const existing = previous[market.key];
+        const existing = sessions[market.key];
         if (!existing || existing.roundStart !== start) {
           // The round rolled over. The finished session is about to be thrown
           // away, so it goes to the grading queue first — keyed by its own
@@ -422,10 +453,21 @@ export function usePaperSession(
           }
         }
         next[market.key] = session;
+    }
+
+    // Commit only real changes. See the note above: allocating a new object
+    // unconditionally is what turned this effect into a render loop.
+    let changed = false;
+    for (const market of MARKETS) {
+      const before = sessions[market.key];
+      const after = next[market.key];
+      if (!before || !after || !sameSession(before, after)) {
+        changed = true;
+        break;
       }
-      return next;
-    });
-  }, [rounds, now, starts, stake, settings, positions]);
+    }
+    if (changed) setSessions(next);
+  }, [rounds, now, starts, stake, settings, positions, sessions]);
 
   /**
    * Grade one finished round on Polymarket's own published result.
