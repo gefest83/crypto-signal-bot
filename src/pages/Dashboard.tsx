@@ -6,7 +6,7 @@ import { MakerStats } from "@/components/maker/MakerStats";
 import { MakerRules } from "@/components/maker/MakerRules";
 import { PaperPanel } from "@/components/maker/PaperPanel";
 import { Button } from "@/components/ui/button";
-import type { PmInterval } from "../convex/polymarket";
+import type { PmInterval } from "@/lib/pm/markets";
 import { useAuth } from "@/hooks/use-auth";
 import {
   MARKETS,

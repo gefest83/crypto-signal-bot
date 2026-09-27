@@ -1,6 +1,5 @@
 import { api } from "../convex/_generated/api";
 import {
-  PM_INTERVALS,
   PM_LIMIT_OF,
   pmRoundStart,
   pmSlug,
@@ -8,7 +7,7 @@ import {
   type PmAsset,
   type PmInterval,
   type PmRound,
-} from "../convex/polymarket";
+} from "@/lib/pm/markets";
 import {
   DEFAULT_STAKE_USD,
   MARKET_PROFILES,

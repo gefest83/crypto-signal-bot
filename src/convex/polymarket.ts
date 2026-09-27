@@ -17,77 +17,34 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { v } from "convex/values";
 import { api } from "./_generated/api";
 import { action } from "./_generated/server";
+// The pure market vocabulary lives outside src/convex on purpose: this file
+// imports the Convex SERVER runtime, so a browser component importing any
+// value from here drags `convex/server` into the client bundle and the preview
+// dies on a 504. See src/lib/pm/markets.ts.
+import {
+  PM_ASSETS,
+  PM_INTERVALS,
+  PM_LIMIT_OF,
+  pmRoundStart,
+  pmSlug,
+  settledUp,
+  type PmAsset,
+  type PmInterval,
+  type PmMarket,
+  type PmRound,
+} from "../lib/pm/markets";
+
+export {
+  PM_ASSETS,
+  PM_INTERVALS,
+  PM_LIMIT_OF,
+  pmRoundStart,
+  pmSlug,
+  settledUp,
+};
+export type { PmAsset, PmInterval, PmMarket, PmRound };
 
 const GAMMA = "https://gamma-api.polymarket.com";
-/**
- * Rounds this console runs, in minutes. Both are listed by Polymarket and both
- * were measured: 5m is the frequent one with a thin edge, 15m is the slower one
- * with a thicker edge that survives a 4c exit. They behave differently enough
- * to be worth separating rather than averaging.
- */
-export const PM_INTERVALS = [5, 15] as const;
-export type PmInterval = (typeof PM_INTERVALS)[number];
-
-/** The limit each interval was measured at. 5m moved up to 0.50; 15m sat at 0.35. */
-export const PM_LIMIT_OF: Record<PmInterval, number> = { 5: 0.5, 15: 0.35 };
-
-/** A market we can rest a limit on: one asset at one interval. */
-export type PmMarket = `${PmAsset}-${PmInterval}`;
-
-/** Polymarket's published outcome for a market slug, or null while unresolved. */
-export async function settledUp(slug: string): Promise<boolean | null> {
-  try {
-    const response = await fetch(`${GAMMA}/events?slug=${slug}`);
-    if (!response.ok) return null;
-    const events = (await response.json()) as Record<string, unknown>[];
-    const market = (events[0]?.markets as Record<string, unknown>[] | undefined)?.[0];
-    if (!market) return null;
-    const prices = JSON.parse(String(market.outcomePrices)) as string[];
-    if (prices[0] === "1" && prices[1] === "0") return true;
-    if (prices[0] === "0" && prices[1] === "1") return false;
-  } catch {
-    /* not resolved yet */
-  }
-  return null;
-}
-
-export const PM_ASSETS = ["btc", "eth"] as const;
-export type PmAsset = (typeof PM_ASSETS)[number];
-
-/** Interval start of the round that contains `now`, in unix seconds. */
-export function pmRoundStart(nowMs: number, interval: PmInterval = 5): number {
-  return Math.floor(nowMs / 1000 / (interval * 60)) * (interval * 60);
-}
-
-export function pmSlug(asset: PmAsset, startSec: number, interval: PmInterval = 5): string {
-  return `${asset}-updown-${interval}m-${startSec}`;
-}
-
-export type PmRound = {
-  asset: PmAsset;
-  start: number;
-  end: number;
-  slug: string;
-  title: string;
-  upTokenId: string | null;
-  downTokenId: string | null;
-  /** Best bid/ask on the UP token, 0-1. */
-  upBid: number | null;
-  upAsk: number | null;
-  /** Derived from the complement, 0-1. */
-  downBid: number | null;
-  downAsk: number | null;
-  /**
-   * Where the quote came from. The CLOB book is the only thing that reflects
-   * what can actually be traded right now: Gamma's own `bestBid`/`bestAsk` on
-   * the event lag behind the book by cents, which would make the console quote
-   * a price nobody can buy at.
-   */
-  priceSource: "book" | "stale" | "none";
-  closed: boolean;
-  /** True when UP settled. null until the market resolves. */
-  upWon: boolean | null;
-};
 
 const round2 = (value: number) => Math.round(value * 100) / 100;
 
