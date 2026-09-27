@@ -34,6 +34,25 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 const BOOK_POLL_MS = 3_000;
 const SYMBOL_OF_ASSET: Record<PmAsset, string> = { btc: "BTCUSDT", eth: "ETHUSDT" };
 
+/** Hard cap on rounds waiting for a published result. */
+const MAX_PENDING = 24;
+
+/** First retry delay, doubling each attempt up to GRADE_MAX_BACKOFF_MS. */
+const GRADE_BASE_BACKOFF_MS = 5_000;
+const GRADE_MAX_BACKOFF_MS = 120_000;
+
+/** One finished round waiting for Polymarket to publish its result. */
+type PendingGrade = {
+  key: MarketKey;
+  session: PaperSession;
+  position: PaperPosition | null;
+  round: PmRound | null;
+  /** Failed attempts so far; drives the backoff. */
+  attempts: number;
+  /** Timestamp before which this entry is left alone. */
+  nextTryAt: number;
+};
+
 /**
  * The four markets this console runs.
  *
@@ -248,10 +267,15 @@ export function usePaperSession(
    * once and giving up would silently drop the round, which is exactly how a
    * console ends up reporting zero trades forever while looking perfectly
    * healthy. So the finished round waits here until the result is real.
+   *
+   * The queue is CAPPED and each entry BACKS OFF, and both are load-bearing.
+   * Left unbounded, a result that never publishes turns this into a queue that
+   * only grows, and a drain that walks all of it once a second — a few hundred
+   * network calls a minute, which locks the tab solid. The oldest entry is
+   * dropped rather than allowed to starve everything behind it, because the
+   * rounds in front of it are the ones that actually describe the strategy.
    */
-  const pending = useRef<
-    { key: MarketKey; session: PaperSession; position: PaperPosition | null; round: PmRound | null }[]
-  >([]);
+  const pending = useRef<PendingGrade[]>([]);
 
   // Each interval has its own clock: a 15m round is still running while the
   // 5m one has already rolled over twice.
@@ -320,7 +344,15 @@ export function usePaperSession(
                 session: existing,
                 position: positions[market.key] ?? null,
                 round: rounds[market.key] ?? null,
+                attempts: 0,
+                nextTryAt: 0,
               });
+              // Keep only the most recent rounds. A console that has been left
+              // open overnight must not spend the morning grading last night's
+              // backlog and stall on it.
+              if (pending.current.length > MAX_PENDING) {
+                pending.current.splice(0, pending.current.length - MAX_PENDING);
+              }
             }
           }
           next[market.key] = empty(market.key, market.asset, market.interval, start, limit, stake);
@@ -483,14 +515,34 @@ export function usePaperSession(
     if (pending.current.length === 0) return;
     let cancelled = false;
     void (async () => {
-      const stillWaiting: typeof pending.current = [];
+      const stillWaiting: PendingGrade[] = [];
+      let settledCount = 0;
       for (const item of pending.current) {
         if (cancelled) return;
-        const ok = await closeRound(item);
-        if (!ok) stillWaiting.push(item);
+        // Backoff: an entry nobody published is not worth re-asking every
+        // second, and the wait is what keeps the request rate flat no matter
+        // how long the tab stays open.
+        if (item.nextTryAt > now) {
+          stillWaiting.push(item);
+          continue;
+        }
+        let ok = false;
+        try {
+          ok = await closeRound(item);
+        } catch (error: unknown) {
+          // A failed request is a retry, never a reason to tear the page down.
+          console.warn("[paper] grading attempt failed", error);
+        }
+        if (ok) {
+          settledCount += 1;
+          continue;
+        }
+        item.attempts += 1;
+        item.nextTryAt =
+          now + Math.min(GRADE_BASE_BACKOFF_MS * 2 ** (item.attempts - 1), GRADE_MAX_BACKOFF_MS);
+        stillWaiting.push(item);
       }
       if (cancelled) return;
-      const settledCount = pending.current.length - stillWaiting.length;
       pending.current = stillWaiting;
       // Nudge ONLY when something was actually graded. Nudging unconditionally
       // re-runs this effect, which re-reads an unpublished round, which nudges
