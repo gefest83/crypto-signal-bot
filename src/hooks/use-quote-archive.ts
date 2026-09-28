@@ -88,10 +88,13 @@ export function useQuoteArchive(markets: ArchiveMarket[] = ARCHIVE_MARKETS) {
     return () => clearInterval(id);
   }, []);
 
+  // `pmRoundStart` takes MILLISECONDS and divides by 1000 itself. Dividing here
+  // as well put the round start in 1970, which made every elapsed time read as
+  // ~20 700 days and sent the evaluation at a date Binance has no candles for.
   const starts = useMemo(() => {
     const map: Partial<Record<ArchiveKey, number>> = {};
     for (const m of markets) {
-      map[keyOf(m)] = pmRoundStart(Math.floor(now / 1000), m.interval) * 1000;
+      map[keyOf(m)] = pmRoundStart(now, m.interval) * 1000;
     }
     return map;
   }, [markets, now]);

@@ -111,7 +111,10 @@ function MarketCard({ asset, label, symbol, cap }: (typeof ASSETS)[number]) {
   const book = books[key] ?? null;
   const start = starts[key] ?? 0;
   const elapsed = start ? now - start : 0;
-  const roundStart = useMemo(() => pmRoundStart(Math.floor(now / 1000), 5) * 1000, [now]);
+  // `pmRoundStart` takes milliseconds and divides by 1000 itself. Passing
+  // seconds here asked Binance for candles around 1970 and got nothing back,
+  // which surfaced as "нет свечей" on a market that was trading normally.
+  const roundStart = useMemo(() => pmRoundStart(now, 5) * 1000, [now]);
   const roundId = Math.floor(roundStart / 1000);
 
   // The decision lands at +20s, so nothing is evaluated before then. Showing a
