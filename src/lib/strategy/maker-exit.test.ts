@@ -16,7 +16,9 @@ import {
   expectedPnlPerStake,
   feePerShare,
   makerPnl,
+  maxExitRate,
   planMakerTrade,
+  realBreakevenExit,
   requiredSurvivorWinRate,
   roundSeconds,
   sharesForStake,
@@ -74,6 +76,7 @@ describe("профили двух рынков не взаимозаменяем
       const won = 1 - limit - fee;
       const lost = -limit - fee;
       const exited = -EXIT_SLIPPAGE - fee;
+      // The exit is priced at the level, minus the spread crossed to get out.
       const derived =
         p.exitRate * exited +
         (1 - p.exitRate) * (p.survivorWinRate * won + (1 - p.survivorWinRate) * lost);
@@ -94,13 +97,13 @@ describe("профили двух рынков не взаимозаменяем
     expect(MARKET_PROFILES[5].losingDays).toBe("2 из 31");
   });
 
-  it("выход по лимиту стоит 6-8% стейка, а не ноль", () => {
-    // Название «выход в ноль» в интерфейсе было ложью: 2ц × шар + 2% от
-    // стейка дают −30..−39 центов на $5, и так закрываются ~80% сделок.
+  it("выход по лимиту стоит проскальзывания и комиссии вместе", () => {
+    // Название «выход в ноль» в интерфейсе было ложью. Круг по одной цене
+    // всегда минус 4% стейка: комиссия 2% платится на входе и на выходе.
     for (const interval of [5, 15] as const) {
       const exit = stakePnl(5, PM_LIMITS[interval], false, true);
       expect(exit).toBeLessThan(0);
-      expect(exit / 5).toBeLessThan(-0.05);
+      expect(exit / 5).toBeLessThan(-0.03);
     }
   });
 
@@ -172,9 +175,9 @@ describe("размер заявки в долларах, а не в шарах",
     expect(stakePnl(5, 0.5, true, false)).toBeCloseTo(5 - 0.1, 10);
   });
 
-  it("выход в ноль стоит проскальзывания и комиссии вместе", () => {
-    // 10 шар × 0.02 проскальзывание = $0.20, плюс 2% от $5 = $0.10. Итого $0.30.
-    expect(stakePnl(5, 0.5, false, true)).toBeCloseTo(-0.3, 10);
+  it("круг по цене входа стоит ровно две комиссии", () => {
+    // 10 шар × 0.01 проскальзывание = $0.10, комиссия 2% на входе и выходе.
+    expect(stakePnl(5, 0.5, false, true)).toBeCloseTo(-0.2, 10);
   });
 
   it("комиссия считается от стейка, а не от шар", () => {
@@ -220,11 +223,37 @@ describe("P&L по реальной цене", () => {
     expect(makerPnl(0.35, true, false)).toBeCloseTo(0.65 - 0.007, 10);
   });
 
-  it("«безубыточный» выход на деле стоит 2.7 цента на шар", () => {
+  it("«безубыточный» выход стоит выше входа, а не на его уровне", () => {
+    // Продажа по цене входа НЕ безубыточна: комиссия 2% платится на входе и
+    // на выходе, то есть круг по одной цене всегда минус 4% стейка. Раньше
+    // здесь стояло 0.35, и из этого поля выводился весь план выхода.
     const plan = planMakerTrade("up", 0.35);
     expect(plan.roundTripCost).toBeCloseTo(EXIT_SLIPPAGE + TRADE_FEE_RATE * 0.35, 10);
-    expect(plan.breakevenExit).toBe(0.35);
+    expect(plan.breakevenExit).toBeCloseTo(realBreakevenExit(0.35), 10);
+    expect(plan.breakevenExit).toBeGreaterThan(0.35);
     expect(plan.winnerPayoff).toBeCloseTo(0.65, 10);
+  });
+
+  it("выход не может сойтись в ноль на цене входа", () => {
+    // Арифметика, а не мнение: 2% на входе плюс 2% на выходе.
+    const shares = sharesForStake(5, 0.5);
+    const proceeds = shares * 0.5;
+    const flat = proceeds - 5 - (5 * TRADE_FEE_RATE + proceeds * TRADE_FEE_RATE);
+    expect(flat).toBeLessThan(0);
+    expect(flat).toBeCloseTo(-0.2, 10);
+  });
+
+  it("выходов не может быть больше предельной доли", () => {
+    // Каждый выход — известный убыток, и удержавшиеся обязаны его покрыть.
+    // Есть потолок, выше которого никакой процент побед не спасает стратегию.
+    for (const interval of [5, 15] as const) {
+      const ceiling = maxExitRate(interval);
+      expect(ceiling).toBeGreaterThan(0);
+      expect(ceiling).toBeLessThan(1);
+      // Живой прогон дал 100% выходов — заведомо выше потолка.
+      expect(1).toBeGreaterThan(ceiling);
+    }
+    expect(maxExitRate(5)).toBeCloseTo(0.917, 2);
   });
 });
 
@@ -243,11 +272,14 @@ describe("сколько должны выигрывать удержавшие�
   });
 
   it("комиссия поднимает планку выше, чем было без неё", () => {
-    // Закрытая сделка стоила 2 цента, теперь 2.7 — и требуемая доля побед
-    // удержавшихся выросла ровно на треть. Запас до измеренных 76% огромный.
+    // Закрытая сделка стоит одно тик проскальзывания ПЛЮС комиссия со стака
+    // выхода — то есть почти вдвое дороже, чем модель без комиссии. Запас до
+    // измеренных 76% побед удержавшихся при этом огромный.
     const withFee = requiredSurvivorWinRate(0.35, 0.09);
-    const withoutFee = ((1 - 0.09) * EXIT_SLIPPAGE) / (0.09 * (1 - 0.35));
-    expect(withFee).toBeCloseTo(withoutFee * 1.35, 10);
+    const fee = TRADE_FEE_RATE * 0.35;
+    const withoutFee = (0.91 * EXIT_SLIPPAGE) / (0.09 * (1 - 0.35));
+    expect(withFee).toBeCloseTo((0.91 * (EXIT_SLIPPAGE + fee)) / (0.09 * (1 - 0.35)), 10);
+    expect(withFee).toBeGreaterThan(withoutFee);
     expect(withFee).toBeLessThan(planMakerTrade("up", 0.35).survivorWinRate);
   });
 });  describe("живое решение", () => {

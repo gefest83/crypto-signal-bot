@@ -2,7 +2,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import type { MarketStats, PaperSession, PaperState, PaperTotals } from "@/hooks/use-paper-session";
-import { MARKET_PROFILES, MIN_ORDER_SHARES, TRADE_FEE_RATE } from "@/lib/strategy/maker-exit";
+import { MARKET_PROFILES, MIN_ORDER_SHARES, TRADE_FEE_RATE, maxExitRate } from "@/lib/strategy/maker-exit";
 import { FlaskConical, Loader2, TrendingUp } from "lucide-react";
 
 const STATE_LABEL: Record<PaperState, string> = {
@@ -78,6 +78,12 @@ export function PaperPanel({
           {perMarket.map((stats) => {
             const profile = MARKET_PROFILES[stats.interval];
             const session = sessions[stats.key];
+            // The share of fills that got exited, against the share this
+            // strategy can afford. Above the ceiling the exits have eaten the
+            // edge before a single round is graded, so it is shown rather than
+            // left for the user to infer from a wall of identical small losses.
+            const exitRate = stats.fills > 0 ? stats.exits / stats.fills : 0;
+            const ceiling = maxExitRate(stats.interval);
             return (
               <div
                 key={stats.key}
@@ -133,6 +139,14 @@ export function PaperPanel({
                 {stats.best != null && (
                   <p className="mt-1.5 font-mono text-[10px] text-muted-foreground">
                     лучшая {usd(stats.best)} · худшая {usd(stats.worst ?? 0)}
+                  </p>
+                )}
+
+                {stats.fills > 0 && exitRate > ceiling && (
+                  <p className="mt-1.5 rounded border border-rose-500/40 bg-rose-500/10 px-2 py-1 font-mono text-[10px] text-rose-300">
+                    Выход сработал в {(exitRate * 100).toFixed(0)}% сделок при потолке{" "}
+                    {(ceiling * 100).toFixed(0)}%. Каждый выход — гарантированный убыток, и удержавшиеся
+                    обязаны его покрыть: выше этого потолка стратегия минус при любом проценте побед.
                   </p>
                 )}
 

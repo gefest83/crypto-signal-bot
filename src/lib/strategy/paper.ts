@@ -38,12 +38,16 @@ export const DEFAULT_TICK = 0.01;
 /**
  * What a resting exit actually costs, per share.
  *
- * The live book on these markets spreads one tick, so 2c is deliberately
- * pessimistic — but it is the number the whole strategy is measured against,
- * and crediting the exit at the restored level instead would quietly delete
- * it.
+ * ONE tick, because that is what the live book spreads — measured, not
+ * assumed. This was 0.02, which quietly charged the exit twice: once here and
+ * again in the commission that `closePosition` applies to the proceeds. A
+ * double-charged exit turns every round trip into a certain loss, and since
+ * the exit fires on almost every fill, the strategy could then only bleed.
+ *
+ * The commission is already modelled where it belongs, on the money that moves.
+ * This constant is the price impact of crossing the spread, and nothing else.
  */
-export const EXIT_SLIPPAGE = 0.02;
+export const EXIT_SLIPPAGE = DEFAULT_TICK;
 
 /** What a paper trader is allowed to do, and what it is forbidden to assume. */
 export type PaperSettings = {

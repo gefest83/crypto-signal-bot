@@ -67,8 +67,8 @@ export function MakerEdge({ stake }: { stake: StakeUsd }) {
                     </p>
                     <p className="mt-0.5 text-[10px] leading-tight text-muted-foreground">
                       Контракт возвращается к цене входа в{" "}
-                      {(profile.exitRate * 100).toFixed(0)}% случаев, сделка закрывается почти в
-                      ноль.
+                      {(profile.exitRate * 100).toFixed(0)}% случаев, сделка закрывается с
+                      убытком в комиссию.
                     </p>
                   </div>
                 </div>

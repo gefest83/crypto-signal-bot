@@ -197,7 +197,7 @@ export default function Dashboard() {
           <div className="min-w-0">
             <p className="text-sm leading-tight font-semibold tracking-tight">Maker Exit</p>
             <p className="truncate text-[11px] leading-tight text-muted-foreground">
-              Вход без тейкерской комиссии · выход в безубыток · рынки 5m и 15m
+              Вход лимитом по спросу · выход по лимиту · рынки 5m и 15m
             </p>
           </div>
           <div className="ms-auto flex items-center gap-3">

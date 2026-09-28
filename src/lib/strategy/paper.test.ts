@@ -186,20 +186,20 @@ describe("выход платит проскальзывание, а не воз
     if (d.filled) expect(d.fillPrice).toBeCloseTo(0.5 - EXIT_SLIPPAGE, 10);
   });
 
-  it("круг на $5 по 0.50 стоит 30 центов, а не 20", () => {
+  it("круг на $5 по 0.50 стоит две комиссии и одно тик", () => {
     const position = openPosition(filledOrder({ price: 0.5, stake: 5 }), 5, 0.02)!;
     const closed = closePosition(position, 0.5 - EXIT_SLIPPAGE, 1_000_100, 0.02);
-    // 10 шар × 0.48 = 4.80 против 5.00, минус 2% на входе и на выходе.
-    expect(closed.pnl).toBeCloseTo(4.8 - 5 - 0.1 - 0.096, 10);
-    expect(Math.abs(closed.pnl ?? 0)).toBeGreaterThan(0.25);
+    // 10 шар × 0.49 = 4.90 против 5.00, минус 2% на входе и на выходе.
+    expect(closed.pnl).toBeCloseTo(4.9 - 5 - 0.1 - 0.098, 10);
+    expect(closed.pnl).toBeLessThan(0);
   });
 
-  it("каждый круг стоит больше одной комиссии — иначе он не круг, а подарок", () => {
-    // Минимально возможный убыток на круг обязан быть заметно больше 4%.
+  it("круг по одной цене не может быть подарком", () => {
+    // Даже без проскальзывания круг минус: комиссия 2% с двух сторон.
     for (const limit of [0.35, 0.5]) {
       const position = openPosition(filledOrder({ price: limit, stake: 5 }), 5, 0.02)!;
-      const closed = closePosition(position, limit - EXIT_SLIPPAGE, 1_000_100, 0.02);
-      expect(closed.pnl).toBeLessThan(-0.2);
+      const flat = closePosition(position, limit, 1_000_100, 0.02);
+      expect(flat.pnl).toBeLessThan(0);
     }
   });
 });

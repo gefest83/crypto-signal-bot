@@ -213,7 +213,7 @@ export default function Landing() {
           <div className="min-w-0">
             <p className="text-sm leading-tight font-semibold tracking-tight">Maker Exit</p>
             <p className="truncate text-[11px] leading-tight text-muted-foreground">
-              Вход без комиссии · выход в безубыток
+              Вход по лимиту · выход по лимиту
             </p>
           </div>
           <nav className="ms-6 hidden items-center gap-6 md:flex">
@@ -263,7 +263,7 @@ export default function Landing() {
               Polymarket · 5-минутные раунды Up/Down
             </span>
             <h1 className="mt-5 text-[2.5rem] leading-[1.05] font-semibold tracking-tight text-balance sm:text-5xl lg:text-[3.4rem]">
-              Направление не угадать. Можно не платить комиссию и выйти в безубыток
+              Направление не угадать. Можно войти лимитом и уйти с маленьким минусом
             </h1>
             <p className="mt-5 max-w-xl text-sm leading-relaxed text-muted-foreground sm:text-base">
               Мы проверили 17277 настоящих 5-минутных раундов. Направление рынок знает
@@ -435,7 +435,7 @@ export default function Landing() {
       <footer className="border-t border-border/60 py-8">
         <div className="mx-auto flex w-full max-w-6xl flex-col items-center gap-2 px-4 text-center sm:px-6">
           <p className="text-xs text-muted-foreground">
-            Maker Exit — вход лимитом без комиссии, выход в безубыток
+            Maker Exit — вход лимитом по спросу, выход по лимиту
           </p>
           <p className="max-w-2xl text-[11px] leading-relaxed text-muted-foreground/80">
             Все расчёты сделаны по настоящим ценам Polymarket. Ордера не исполняются

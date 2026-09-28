@@ -47,11 +47,16 @@ export const LIMIT_MAX = 0.6;
  */
 export const DEFAULT_LIMIT = 0.5;
 /**
- * A resting sell fills at or below the offer. The live book on these markets
- * spreads one tick, so 2c is deliberately conservative — and it has to be:
- * see `breakEvenSlippage` for where each interval's edge dies.
+ * A resting sell fills at or below the offer. One tick, because that is what
+ * the live book spreads — measured on these markets, not assumed.
+ *
+ * This was 0.02, and it was wrong twice over: it charged the crossing twice
+ * (once here, again in the commission on the proceeds), and it charged more
+ * than the spread it was meant to model. See `realBreakevenExit` for why a
+ * round trip can never be flat at the entry price, and `maxExitRate` for the
+ * share of exits the strategy can afford.
  */
-export const EXIT_SLIPPAGE = 0.02;
+export const EXIT_SLIPPAGE = 0.01;
 /**
  * Charged on every trade: 2% of the USDC stake, regardless of how it ends.
  *
@@ -267,7 +272,7 @@ export function planMakerTrade(side: Side, limit: number = DEFAULT_LIMIT): Maker
   return {
     side,
     limit,
-    breakevenExit: limit,
+    breakevenExit: realBreakevenExit(limit),
     roundTripCost: EXIT_SLIPPAGE + TRADE_FEE_RATE * limit,
     // A winner pays 1 - limit; a round-tripped trade costs the exit plus the fee.
     winnerPayoff: 1 - limit,
@@ -285,6 +290,44 @@ export function makerPnl(limit: number, won: boolean, exited: boolean): number {
   const fee = TRADE_FEE_RATE * limit;
   if (exited) return -EXIT_SLIPPAGE - fee;
   return (won ? 1 - limit : -limit) - fee;
+}
+
+/**
+ * The price a round trip has to clear to actually be flat.
+ *
+ * This is NOT the entry limit, and the difference is the whole strategy. The
+ * commission is charged on the stake going in AND on the proceeds coming out,
+ * so selling straight back at the entry price returns the stake minus two
+ * commissions — 4% of it. "Breakeven" at the entry price is a −$0.20 round
+ * trip on a $5 stake, not a flat one.
+ *
+ * Solving proceeds·(1−fee) = stake·(1+fee) for the exit price:
+ */
+export function realBreakevenExit(limit: number = DEFAULT_LIMIT): number {
+  return (limit * (1 + TRADE_FEE_RATE)) / (1 - TRADE_FEE_RATE);
+}
+
+/**
+ * The share of trades that may be exited before the strategy stops paying.
+ *
+ * Every exit is a known loss: the exit cost plus the commission. Every
+ * survivor is what has to cover them. So there is a hard ceiling on how often
+ * the exit may fire, and it is the number that decides whether this business
+ * exists at all.
+ *
+ * Solving exitRate·exitEV + (1−exitRate)·survivorEV = 0 gives the boundary.
+ * Above it, no win rate rescues the strategy — the exits have eaten the edge
+ * before a single round is graded.
+ */
+export function maxExitRate(interval: 5 | 15): number {
+  const p = MARKET_PROFILES[interval];
+  const limit = PM_LIMITS[interval];
+  const fee = TRADE_FEE_RATE * limit;
+  const exitEV = -EXIT_SLIPPAGE - fee;
+  const survivorEV =
+    p.survivorWinRate * (1 - limit - fee) - (1 - p.survivorWinRate) * (limit + fee);
+  if (survivorEV <= 0) return 0;
+  return survivorEV / (survivorEV - exitEV);
 }
 
 /**
