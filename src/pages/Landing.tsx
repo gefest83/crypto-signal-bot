@@ -9,7 +9,6 @@ import {
   ArrowUp,
   Banknote,
   CircleDollarSign,
-  Handshake,
   Repeat,
   ShieldCheck,
   Target,
@@ -18,37 +17,37 @@ import {
 } from "lucide-react";
 import { useNavigate } from "react-router";
 
-/** Why a plain limit order loses, and why the exit is the whole strategy. */
+/** How the rule works and what it has to beat. */
 const MECHANISM = [
   {
-    title: "Тейкер съедает перевес",
-    body: "Polymarket берёт 7% × (1 − цена). При цене 0.30 это 4.9% ставки — ровно величина того перекоса, ради которого всё затевалось. Любая идея, купленная по рынку, умирает здесь.",
+    title: "Решение на +20 секунде",
+    body: "Ровно в двадцатую секунду раунда берётся поток тайкер-покупок за 30 секунд до неё. Сторону задаёт знак дисбаланса, а движение цены за эти же 20 секунд обязано с ним совпадать.",
+    icon: Timer,
+  },
+  {
+    title: "Дисбаланс, а не доля",
+    body: "Формула 2·buy/vol − 1 центрирована на нуле. Первая версия считала просто buy/vol — это доля с центром 0.5, и на пороге 0.25 ветка DOWN не срабатывала ни разу. Сигнал был прибит к одной стороне.",
     icon: Banknote,
   },
   {
-    title: "Мейкер платит меньше",
-    body: "Лимитная заявка не пересекает спред и не платит тейкерских 4.9%. Вместо этого с каждой сделки уходит 2% от стейка — на $1 это 2 цента, независимо от исхода.",
+    title: "Гейт отсекает шум",
+    body: "Сделка не открывается, если цена за 20 секунд сдвинулась меньше чем на 2 базисных пункта. Но сам гейт не доказан: +3.5 п.п. при z = 0.85, то есть неотличимо от случайности.",
     icon: Wallet,
   },
   {
-    title: "Вход убыточен. И это нормально",
-    body: "Лимит набивается тем, кто прав: стейк в $1 уходит в минус почти целиком, около −29 центов на сделку. Отбор не обойти — он и есть смысл лимитной заявки.",
-    icon: ArrowDown,
-  },
-  {
-    title: "Выход делает всю работу",
-    body: "Контракт возвращается к цене входа в 81% случаев. В этот момент мы продаём и закрываем сделку за 30 центов на $5, а убыток ограничен спредом и комиссией, а не всей ставкой.",
+    title: "Рынок уже откалиброван",
+    body: "Цена на +15 секунде предсказывает исход с точностью ±3 п.п. по всем бакетам: 0.5 → 49.0%, 0.6 → 59.3%. Значит попадание выше рынка — не подарок, а противоречие.",
     icon: Repeat,
   },
   {
-    title: "Держатся только победители",
-    body: "19% сделок не возвращаются к лимиту — именно они доходят до расчёта. И выигрывают в 73% случаев. Поэтому перевес держится на выходе, но не целиком на нём.",
-    icon: ArrowUp,
+    title: "Комиссия — это и есть преимущество",
+    body: "200bps с каждой стороны плюс тик спреда — вот что сигнал обязан перекрыть. Круг, закрытый по той же цене, минус всегда. Поэтому P&L по mid-цене здесь обманчив.",
+    icon: ArrowDown,
   },
   {
-    title: "Сторону выбирает цена",
-    body: "Лимит ставится на ту сторону, за которую рынок платит меньше. DOWN — точное дополнение UP, поэтому лимит 0.50 достижим всегда.",
-    icon: Handshake,
+    title: "Проверяем на том, что можно купить",
+    body: "Книга закрытого рынка пуста, истории исполненных сделок нет. Единственный честный источник — наблюдать стакан вживую ровно в момент, когда вход был возможен.",
+    icon: ArrowUp,
   },
 ];
 
@@ -56,27 +55,32 @@ const ROUND_STEPS = [
   {
     time: "12:00:00",
     title: "Раунд открылся",
-    body: "Раунд длится 5 минут — их 288 в сутки на актив вместо 96, поэтому сделок втрое больше. Контракт стоит около 0.50 с каждой стороны.",
+    body: "Стартовая цена фиксируется как точка отсчёта. Дальше важна не она сама, а движение за первые 20 секунд.",
   },
   {
-    time: "12:00:24",
-    title: "Заявка в стакане",
-    body: "Наш bid стоит на 0.50 и ждёт. Мы ничего не платим и ничего не рискуем, пока он там.",
+    time: "12:00:20",
+    title: "Считаем поток",
+    body: "Суммируем тайкер-покупки за окно (t−30с, t]. Дисбаланс 2·buy/vol − 1 должен превысить 0.25 по модулю.",
   },
   {
-    time: "12:01:31",
-    title: "Ask дошёл до лимита",
-    body: "Продавец исполнил нашу заявку. Позиция открыта — и мы её не держим из упрямства.",
+    time: "12:00:20",
+    title: "Сверяем знаки",
+    body: "Движение цены за 20 секунд должно совпадать по знаку с дисбалансом. Расхождение — HOLD, без исключений.",
   },
   {
-    time: "12:02:41",
-    title: "Цена вернулась к 0.50",
-    body: "Bid снова на нашем уровне. Продаём: 2 цента проскальзывания плюс 2% комиссии — на стейк $1 это 9 центов.",
+    time: "12:00:20",
+    title: "Отсекаем плоский шум",
+    body: "Если |ret20| меньше 2бп, сделка не открывается. Цена почти не двигалась — таймерный поток в это время ничего не значит.",
+  },
+  {
+    time: "12:00:20",
+    title: "Проверяем цену входа",
+    body: "Спрос не выше 0.60 на BTC и 0.70 на ETH. Дороже — не входим: на такой цене ошибка съедает весь перевес.",
   },
   {
     time: "12:05:00",
     title: "Расчёт",
-    body: "Если цена так и не вернулась, держим до конца. Polymarket публикует результат, и он попадает в журнал.",
+    body: "Победитель получает $1 за шар. Правило записывается в журнал вместе с тем ask, который был в момент решения.",
   },
 ];
 
@@ -87,13 +91,13 @@ const HONESTY = [
     icon: Target,
   },
   {
-    title: "Главное допущение не проверено",
-    body: "Мы знаем, что цена возвращается к лимиту. Мы не знаем, что в этот момент кто-то перебил ставку. В падающем рынке биты бьют, а не офферы — и на этом стоит вся прибыль. Это первое, что проверяет консоль.",
+    title: "Прибыль не установлена",
+    body: "Направление настоящее, деньги — вопрос открытый. Рынок уже откалиброван, поэтому покупка по mid-цене даст правдоподобный P&L из чистого артефакта измерения. Показывать его было бы враньём с красивым числом.",
     icon: AlertTriangle,
   },
   {
     title: "Ничего не исполняется автоматически",
-    body: "Ордера не отправляются. Консоль воспроизводит состояние стратегии по живому стакану и ведёт журнал. Симуляцию, выданную за торговлю, мы уже проверяли — она врала в 15 раз.",
+    body: "Ордера не отправляются. Консоль считает решение по живому стакану и пишет в архив снимки цен. Симуляцию, выданную за торговлю, мы уже проверяли — она врала в 15 раз.",
     icon: ShieldCheck,
   },
 ];
@@ -111,58 +115,59 @@ function BrandMark({ className }: { className?: string }) {
   );
 }
 
-function MakerPreview() {
+function SignalPreview() {
   return (
     <div className="surface relative overflow-hidden border border-border/70 bg-[linear-gradient(150deg,var(--primary-soft,var(--muted)),transparent_60%)] p-5 sm:p-6">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <span className="text-sm font-semibold tracking-tight">BTC</span>
-          <span className="font-mono text-[11px] text-muted-foreground">12:00 – 12:15 UTC</span>
+          <span className="font-mono text-[11px] text-muted-foreground">Up/Down 5m</span>
         </div>
         <Badge
           variant="outline"
-          className="rounded-full border-sky-500/30 bg-sky-500/10 px-2.5 py-0.5 text-[10px] font-semibold tracking-wider text-sky-500"
+          className="rounded-full border-emerald-500/30 bg-emerald-500/10 px-2.5 py-0.5 text-[10px] font-semibold tracking-wider text-emerald-500"
         >
-          ЗАЯВКА В СТАКАНЕ
+          РЕШЕНИЕ ПРИНЯТО
         </Badge>
       </div>
 
       <div className="mt-6 flex items-center gap-5">
-        <span className="relative flex size-14 items-center justify-center rounded-2xl border border-sky-500/25 bg-sky-500/10 text-sky-500">
-          <span className="absolute inset-0 -z-10 animate-signal-pulse rounded-full bg-sky-500/25 blur-xl" />
+        <span className="relative flex size-14 items-center justify-center rounded-2xl border border-emerald-500/25 bg-emerald-500/10 text-emerald-500">
+          <span className="absolute inset-0 -z-10 animate-signal-pulse rounded-full bg-emerald-500/25 blur-xl" />
           <Timer className="size-7" strokeWidth={2.4} />
         </span>
         <div>
-          <p className="font-mono text-[3.25rem] leading-none font-semibold tracking-tight text-sky-500">
-            0.50
+          <p className="font-mono text-[3.25rem] leading-none font-semibold tracking-tight text-emerald-500">
+            UP
           </p>
-          <p className="mt-1.5 text-sm font-medium">Лимит на дешёвой стороне</p>
+          <p className="mt-1.5 text-sm font-medium">+20с от старта раунда</p>
         </div>
       </div>
 
       <div className="mt-6 grid grid-cols-3 gap-3">
         <div className="rounded-xl border border-border/70 bg-card/70 px-3 py-2.5">
-          <p className="text-[10px] tracking-wider text-muted-foreground uppercase">Ask сейчас</p>
-          <p className="mt-1 font-mono text-xl tabular-nums">0.62</p>
+          <p className="text-[10px] tracking-wider text-muted-foreground uppercase">Дисбаланс</p>
+          <p className="mt-1 font-mono text-xl tabular-nums">+0.27</p>
         </div>
         <div className="rounded-xl border border-border/70 bg-card/70 px-3 py-2.5">
-          <p className="text-[10px] tracking-wider text-muted-foreground uppercase">Комиссия</p>
-          <p className="mt-1 font-mono text-xl tabular-nums">2%</p>
+          <p className="text-[10px] tracking-wider text-muted-foreground uppercase">ret20</p>
+          <p className="mt-1 font-mono text-xl tabular-nums">+3.9бп</p>
         </div>
         <div className="rounded-xl border border-border/70 bg-card/70 px-3 py-2.5">
-          <p className="text-[10px] tracking-wider text-muted-foreground uppercase">Возврат</p>
-          <p className="mt-1 font-mono text-xl tabular-nums">91%</p>
+          <p className="text-[10px] tracking-wider text-muted-foreground uppercase">Цена входа</p>
+          <p className="mt-1 font-mono text-xl tabular-nums">0.50</p>
         </div>
       </div>
 
       <div className="mt-5">
         <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
-          <div className="relative h-full w-[35%] overflow-hidden rounded-full bg-sky-500">
+          <div className="relative h-full w-[58%] overflow-hidden rounded-full bg-emerald-500">
             <span className="absolute inset-y-0 w-14 animate-signal-sweep bg-[linear-gradient(90deg,transparent,var(--primary-foreground),transparent)] opacity-40" />
           </div>
         </div>
         <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
-          Лимит в стакане · мы не платим комиссию и не держим позицию из упрямства
+          Правило поймало 65.5% против монетки (z ≈ 7). Зарабатывает ли — проверяется на живых
+          котировках, а не на mid.
         </p>
       </div>
     </div>
@@ -211,9 +216,9 @@ export default function Landing() {
         <div className="mx-auto flex w-full max-w-6xl items-center gap-3 px-4 py-3 sm:px-6">
           <BrandMark />
           <div className="min-w-0">
-            <p className="text-sm leading-tight font-semibold tracking-tight">Maker Exit</p>
+            <p className="text-sm leading-tight font-semibold tracking-tight">RetMag</p>
             <p className="truncate text-[11px] leading-tight text-muted-foreground">
-              Вход по лимиту · выход по лимиту
+              Дисбаланс потока · BTC/ETH Up/Down 5m
             </p>
           </div>
           <nav className="ms-6 hidden items-center gap-6 md:flex">
@@ -263,22 +268,22 @@ export default function Landing() {
               Polymarket · 5-минутные раунды Up/Down
             </span>
             <h1 className="mt-5 text-[2.5rem] leading-[1.05] font-semibold tracking-tight text-balance sm:text-5xl lg:text-[3.4rem]">
-              Направление не угадать. Можно войти лимитом и уйти с маленьким минусом
+              Сигнал, который ловит направление. И вопрос, зарабатывает ли он
             </h1>
             <p className="mt-5 max-w-xl text-sm leading-relaxed text-muted-foreground sm:text-base">
-              Мы проверили 17277 настоящих 5-минутных раундов. Направление рынок знает
-              лучше нас: лучший предиктор ошибается меньше, чем на один тик. Зато
-              перевес, который в этих раундах есть, съедала комиссия тейкера — целиком.
-              Лимитная заявка платит только 2% от стейка, а выход по цене входа
-              ограничивает убыток девятью центами на доллар. Заявка минимальная — $1,
-              это и есть весь риск на сделку.
+              Дисбаланс тайкер-потока на 20-й секунде раунда совпадает с исходом в
+              65.5% случаев на BTC и 67.7% на ETH — против монетки это z ≈ 7, не шум.
+              Дальше начинается сложное: рынок откалиброван с точностью ±3 п.п., поэтому
+              попадание выше рыночной цены — не преимущество, а противоречие. Мы не
+              показываем прибыль, потому что её пока не на чем считать: P&L по mid-цене
+              здесь обманчив. Мы собираем живые котировки, на которых это можно проверить.
             </p>
 
             <div className="mt-7 grid max-w-lg grid-cols-3 gap-3">
               {[
-                { label: "P&L на $5 стейк", value: "+$0.18", tone: "text-emerald-500" },
-                { label: "Проигрышных дней", value: "2 из 31" },
-                { label: "Проверено раундов", value: "17277" },
+                { label: "Попаданий BTC", value: "65.5%", tone: "text-emerald-500" },
+                { label: "Против монетки", value: "z ≈ 7" },
+                { label: "Проверено раундов", value: "576" },
               ].map((stat) => (
                 <div
                   key={stat.label}
@@ -310,7 +315,7 @@ export default function Landing() {
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.5, delay: 0.1, ease: "easeOut" }}
           >
-            <MakerPreview />
+            <SignalPreview />
           </motion.div>
         </div>
       </section>
@@ -320,8 +325,8 @@ export default function Landing() {
         <div className="mx-auto w-full max-w-6xl px-4 sm:px-6">
           <SectionHeading
             eyebrow="Механизм"
-            title="Почему вход убыточен, а стратегия зарабатывает"
-            body="Это не прогноз и не сигнал. Это утверждение об исполнении: мы платим ноль комиссии, принимаем отрицательное качество входа как цену за право выйти без убытка."
+            title="Как принимается решение и что ему надо перекрыть"
+            body="Правило смотрит на поток тайкер-покупок за 30 секунд до 20-й секунды раунда и требует, чтобы движение цены подтвердило его знаком. Дальше остаётся economics: 200bps комиссии с обеих сторон — это и есть тот перевес, который сигнал обязан превзойти."
           />
 
           <div className="mt-12 grid gap-5 md:grid-cols-2 lg:grid-cols-3">
@@ -435,7 +440,7 @@ export default function Landing() {
       <footer className="border-t border-border/60 py-8">
         <div className="mx-auto flex w-full max-w-6xl flex-col items-center gap-2 px-4 text-center sm:px-6">
           <p className="text-xs text-muted-foreground">
-            Maker Exit — вход лимитом по спросу, выход по лимиту
+            RetMag — дисбаланс тайкер-потока на BTC/ETH Up/Down 5m
           </p>
           <p className="max-w-2xl text-[11px] leading-relaxed text-muted-foreground/80">
             Все расчёты сделаны по настоящим ценам Polymarket. Ордера не исполняются

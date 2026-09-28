@@ -132,7 +132,7 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
                       onClick={() => navigate("/")}
                     />
                   </div>
-                <CardTitle className="text-xl">Вход в Maker Exit</CardTitle>
+                <CardTitle className="text-xl">Вход в RetMag</CardTitle>
                 <CardDescription>
                   Введи email — пришлём одноразовый код
                 </CardDescription>

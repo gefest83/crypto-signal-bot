@@ -1,263 +1,245 @@
-import { LogoDropdown } from "@/components/LogoDropdown";
-import { MakerEdge } from "@/components/maker/MakerEdge";
-import { MakerJournal } from "@/components/maker/MakerJournal";
-import { MakerRound } from "@/components/maker/MakerRound";
-import { MakerStats } from "@/components/maker/MakerStats";
-import { MakerRules } from "@/components/maker/MakerRules";
-import { PaperPanel } from "@/components/maker/PaperPanel";
+import { RequireAuth } from "@/components/RequireAuth";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import type { PmInterval } from "@/lib/pm/markets";
-import { useAuth } from "@/hooks/use-auth";
-import {
-  MARKETS,
-  usePaperSession,
-  type MarketStats,
-  type PaperSession,
-} from "@/hooks/use-paper-session";
-import { DEFAULT_PAPER } from "@/lib/strategy/paper";
-import {
-  MIN_ORDER_SHARES,
-  PM_LIMITS,
-  STAKE_OPTIONS_USD,
-  stakeOutcomes,
-  type StakeUsd,
-} from "@/lib/strategy/maker-exit";
-import { cn } from "@/lib/utils";
-import { LogOut } from "lucide-react";
-import { useState } from "react";
-import { useNavigate } from "react-router";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { api } from "@/convex/_generated/api";
+import { ARCHIVE_MARKETS, useQuoteArchive } from "@/hooks/use-quote-archive";
+import { pmRoundStart } from "@/lib/pm/markets";
+import { FLOW_THRESHOLD, RET_MAG_THR_BPS } from "@/lib/retmag/rule";
+import { useAction, useQuery } from "convex/react";
+import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router";
 
-/** The end of the round containing `now`, for one interval. */
-function roundEnd(now: number, interval: PmInterval): number {
-  const start = Math.floor(now / 1000 / (interval * 60)) * (interval * 60) * 1000;
-  return start + interval * 60_000;
-}
+type Asset = "btc" | "eth";
 
-const PHASE_HINT: Record<string, string> = {
-  quoting: "заявка в стакане",
-  filled: "набито, держим",
-  closing: "ждём выход",
-  closed: "выход",
-  held: "держали",
-  missed: "не набилась",
-};
+const ASSETS: { asset: Asset; label: string; symbol: string; cap: string }[] = [
+  { asset: "btc", label: "BTC", symbol: "BTCUSDT", cap: "0.60" },
+  { asset: "eth", label: "ETH", symbol: "ETHUSDT", cap: "0.70" },
+];
+
+/** Rounds needed before "hit rate vs price" separates from noise. */
+const ROUNDS_NEEDED = 300;
 
 /**
- * Order size, in real USDC.
+ * The verdict, stated as what is actually known.
  *
- * Polymarket sells dollars, not shares, and the smallest order the books take
- * is 5 SHARES, not dollars — at the 0.50 limit that is $2.50, so the options
- * start at $5. A $1 stake was never executable, and the risk on a real order
- * is the full stake plus 2%, which is the number every P&L here is measured
- * against.
+ * This panel is the point of the project, so it sits above the live cards
+ * rather than below them. The measured facts, in order of how much they matter:
+ *
+ *   - DIRECTION is real: 65.5% BTC / 67.7% ETH against a coin flip, z ≈ 7,
+ *     over 576 rounds per asset;
+ *   - the magnitude gate is NOT proven: +3.5 p.p. at z = 0.85, which on a
+ *     sample that size is noise, while halving the number of trades;
+ *   - the market is CALIBRATED within ±3 p.p. in every price bucket, so a 69%
+ *     hit rate entering near 0.50 is a contradiction, not a 19-point edge.
+ *
+ * That last point is why no P&L is shown here. The honest P&L is not yet
+ * computable: historical executable quotes do not exist for these tokens, and a
+ * mid price nobody could trade produces a number that looks like an edge while
+ * being an artefact of the measurement.
  */
-function StakeSwitch({
-  stake,
-  onSelect,
-}: {
-  stake: StakeUsd;
-  onSelect: (next: StakeUsd) => void;
-}) {
-  const outcomes = stakeOutcomes(stake, PM_LIMITS[5]);
+function Verdict({ rounds, quotes }: { rounds: number; quotes: number }) {
+  const progress = Math.min(1, rounds / ROUNDS_NEEDED);
 
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      <span className="text-[11px] text-muted-foreground">Стейк</span>
-      {STAKE_OPTIONS_USD.map((option) => (
-        <button
-          key={option}
-          type="button"
-          onClick={() => onSelect(option)}
-          className={cn(
-            "rounded-lg border px-3 py-1.5 font-mono text-xs transition-colors",
-            option === stake
-              ? "border-primary/40 bg-primary/5 text-foreground"
-              : "border-border bg-card text-muted-foreground hover:bg-muted/50",
-          )}
-        >
-          ${option}
-        </button>
-      ))}
-      <span className="ms-auto font-mono text-[11px] text-muted-foreground">
-        {outcomes.won.toFixed(2)} $ выигрыш · {outcomes.lost.toFixed(2)} $ проигрыш ·{" "}
-        {outcomes.exited.toFixed(2)} $ выход
-      </span>
-      {stake === STAKE_OPTIONS_USD[0] && (
-        <span className="text-[10px] text-muted-foreground/70">
-          минимум биржи — {MIN_ORDER_SHARES} шар
-        </span>
-      )}
-    </div>
+    <Card className="border-amber-500/30 bg-amber-500/5">
+      <CardHeader>
+        <CardTitle className="text-base">Что установлено, а что нет</CardTitle>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3 text-sm">
+        <div className="grid gap-2 sm:grid-cols-3">
+          <div className="rounded-md border border-emerald-500/25 bg-emerald-500/5 p-2.5">
+            <p className="text-[10px] tracking-wide text-emerald-500/80 uppercase">
+              подтверждено
+            </p>
+            <p className="mt-1 text-xs leading-relaxed text-foreground/90">
+              Направление сигнала настоящее: <b>65.5% BTC / 67.7% ETH</b> против
+              монетки, z ≈ 7.
+            </p>
+          </div>
+          <div className="rounded-md border border-rose-500/25 bg-rose-500/5 p-2.5">
+            <p className="text-[10px] tracking-wide text-rose-500/80 uppercase">
+              не доказано
+            </p>
+            <p className="mt-1 text-xs leading-relaxed text-foreground/90">
+              Гейт <b>|ret20| ≥ {RET_MAG_THR_BPS}бп</b>: +3.5 п.п. при z = 0.85 — шум, при
+              этом вдвое режет сделки.
+            </p>
+          </div>
+          <div className="rounded-md border border-amber-500/25 bg-amber-500/5 p-2.5">
+            <p className="text-[10px] tracking-wide text-amber-500/80 uppercase">
+              неизвестно
+            </p>
+            <p className="mt-1 text-xs leading-relaxed text-foreground/90">
+              Зарабатывает ли. Рынок откалиброван (±3 п.п.), значит P&amp;L с mid — артефакт.
+            </p>
+          </div>
+        </div>
+
+        <div className="rounded-md border border-border/60 bg-card/40 p-2.5">
+          <div className="flex items-baseline justify-between text-xs">
+            <span className="text-muted-foreground">Накоплено исполнимых котировок</span>
+            <span className="font-mono tabular-nums text-foreground">
+              {rounds} / {ROUNDS_NEEDED} раундов
+            </span>
+          </div>
+          <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-muted">
+            <div
+              className="h-full rounded-full bg-amber-500 transition-all"
+              style={{ width: `${progress * 100}%` }}
+            />
+          </div>
+          <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">
+            {quotes > 0
+              ? `В архиве ${quotes} снимков стакана. Исторические исполненные сделки по этим токенам недоступны — книга закрытого рынка пуста, — поэтому ответ появится только из живого наблюдения. Держите вкладку открытой.`
+              : "Архив пуст — вкладка ещё не наблюдала рынок. Снимки появятся в окне +12…+45с после старта раунда."}
+          </p>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
-/**
- * One tab per market, all four of them.
- *
- * The tabs used to be BTC and ETH only, because there was only one interval
- * running. Now that both 5m and 15m are live, hiding them behind a single
- * "asset" switch would make it impossible to see which of the four a number
- * came from — and that distinction is the whole reason the markets are
- * measured separately. So every market gets its own tab, each labelled with
- * its interval and its own limit, because 0.50 and 0.35 are not the same trade.
- */
-function MarketSwitch({
-  active,
-  onSelect,
-  sessions,
-  perMarket,
-}: {
-  active: string;
-  onSelect: (key: string) => void;
-  sessions: Partial<Record<string, PaperSession>>;
-  perMarket: MarketStats[];
-}) {
-  const realisedOf = new Map(perMarket.map((s) => [s.key, s.realised]));
-  const fillsOf = new Map(perMarket.map((s) => [s.key, s.fills]));
+/** One market: its book right now, and what the rule says about it. */
+function MarketCard({ asset, label, symbol, cap }: (typeof ASSETS)[number]) {
+  const evaluate = useAction(api.retmag.evaluate);
+  const { now, books, starts } = useQuoteArchive(ARCHIVE_MARKETS);
+  const [live, setLive] = useState<Awaited<ReturnType<typeof evaluate>> | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const key = `${asset}-5`;
+  const book = books[key] ?? null;
+  const start = starts[key] ?? 0;
+  const elapsed = start ? now - start : 0;
+  const roundStart = useMemo(() => pmRoundStart(Math.floor(now / 1000), 5) * 1000, [now]);
+  const roundId = Math.floor(roundStart / 1000);
+
+  // The decision lands at +20s, so nothing is evaluated before then. Showing a
+  // verdict earlier would be showing a guess dressed as a measurement.
+  const ready = elapsed >= 20_000;
+  const decided = live?.roundStart === roundId ? live : null;
+
+  useEffect(() => {
+    if (!ready || busy) return;
+    setBusy(true);
+    evaluate({ asset, roundStartMs: roundStart })
+      .then((res) => setLive(res))
+      .catch((error: unknown) => console.warn("[retmag] evaluate failed", error))
+      .finally(() => setBusy(false));
+  }, [asset, busy, evaluate, ready, roundStart]);
 
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      {MARKETS.map((market) => {
-        const isActive = market.key === active;
-        const session = sessions[market.key];
-        const limit = PM_LIMITS[market.interval];
-        const realised = realisedOf.get(market.key) ?? 0;
-        const fills = fillsOf.get(market.key) ?? 0;
-        return (
-          <button
-            key={market.key}
-            type="button"
-            onClick={() => onSelect(market.key)}
-            className={cn(
-              "flex items-center gap-2.5 rounded-xl border px-3.5 py-2.5 transition-colors",
-              isActive
-                ? "border-primary/40 bg-primary/5"
-                : "border-border bg-card hover:bg-muted/50",
-            )}
-          >
-            <span className="text-sm font-semibold tracking-tight">
-              {market.asset.toUpperCase()}
-            </span>
-            <span
-              className={cn(
-                "rounded px-1.5 py-0.5 font-mono text-[10px]",
-                market.interval === 5
-                  ? "bg-sky-500/15 text-sky-500"
-                  : "bg-amber-500/15 text-amber-500",
-              )}
-            >
-              {market.interval}m
-            </span>
-            <span className="font-mono text-[11px] text-muted-foreground">
-              {PHASE_HINT[session?.state ?? "quoting"]}
-            </span>
-            <span className="font-mono text-xs tabular-nums text-muted-foreground">
-              {session?.ask != null ? session.ask.toFixed(2) : "—"}
-            </span>
-            <span
-              className={cn(
-                "font-mono text-[11px] tabular-nums",
-                fills === 0
-                  ? "text-muted-foreground/60"
-                  : realised >= 0
-                    ? "text-emerald-500"
-                    : "text-rose-500",
-              )}
-            >
-              {fills === 0 ? "—" : `${realised >= 0 ? "+" : "−"}$${Math.abs(realised).toFixed(2)}`}
-            </span>
-            <span className="font-mono text-[10px] text-muted-foreground/60">
-              {limit.toFixed(2)}
-            </span>
-          </button>
-        );
-      })}
+    <Card>
+      <CardHeader>
+        <div className="flex items-center justify-between gap-2">
+          <CardTitle className="text-base">
+            {label} <span className="text-muted-foreground">5m</span>
+          </CardTitle>
+          <Badge variant="outline" className="font-mono text-[11px]">
+            +{(elapsed / 1000).toFixed(0)}с
+          </Badge>
+        </div>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-2.5">
+        <dl className="grid grid-cols-2 gap-x-3 gap-y-1 font-mono text-[11px]">
+          <div className="flex justify-between">
+            <dt className="text-muted-foreground">UP</dt>
+            <dd className="tabular-nums">
+              {book?.upAsk ?? "—"}/{book?.upBid ?? "—"}
+            </dd>
+          </div>
+          <div className="flex justify-between">
+            <dt className="text-muted-foreground">DN</dt>
+            <dd className="tabular-nums">
+              {book?.downAsk ?? "—"}/{book?.downBid ?? "—"}
+            </dd>
+          </div>
+        </dl>
+
+        <div
+          className={`rounded-md border px-2.5 py-2 ${
+            decided?.signal && decided.signal !== "hold"
+              ? "border-emerald-500/30 bg-emerald-500/10"
+              : "border-border/60 bg-card/40"
+          }`}
+        >
+          <p className="text-[10px] tracking-wide text-muted-foreground uppercase">сигнал</p>
+          <p className="mt-0.5 font-mono text-sm font-semibold uppercase">
+            {!ready ? "ждём +20с" : busy || !decided ? "считаем…" : decided.signal}
+          </p>
+          {decided && (
+            <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">{decided.detail}</p>
+          )}
+          {decided && !decided.complete && (
+            <p className="mt-1 text-[11px] text-amber-500">Данные неполные — решение не засчитывается.</p>
+          )}
+          {decided?.imb != null && (
+            <p className="mt-1 font-mono text-[10px] text-muted-foreground">
+              imb {decided.imb.toFixed(3)} (порог {FLOW_THRESHOLD}) · ret20{" "}
+              {decided.ret20Bps?.toFixed(1) ?? "—"}бп
+            </p>
+          )}
+        </div>
+
+        <p className="font-mono text-[10px] text-muted-foreground">
+          {symbol} · потолок входа {cap}
+        </p>
+      </CardContent>
+    </Card>
+  );
+}
+
+function DashboardInner() {
+  const stats = useQuery(api.quotes.archiveStats, {});
+
+  return (
+    <div className="mx-auto flex min-h-screen max-w-5xl flex-col gap-4 px-4 py-8">
+      <header className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-semibold tracking-tight">RetMag</h1>
+          <p className="text-sm text-muted-foreground">
+            Тейкер-сигнал на BTC/ETH Up/Down 5m. Проверяется на живых котировках.
+          </p>
+        </div>
+        <Button asChild variant="outline" size="sm">
+          <Link to="/">На главную</Link>
+        </Button>
+      </header>
+
+      <Verdict rounds={stats?.rounds ?? 0} quotes={stats?.quotes ?? 0} />
+
+      <div className="grid gap-3 sm:grid-cols-2">
+        {ASSETS.map((a) => (
+          <MarketCard key={a.asset} {...a} />
+        ))}
+      </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Правило</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <pre className="overflow-x-auto rounded-md bg-muted/40 p-3 font-mono text-[11px] leading-relaxed">
+            {`t      = round_start + 20s
+window = (t - 30s, t]
+imb    = 2*buy/vol - 1        <- имбаланс, центрирован на 0
+ret20  = (close@t - close@round_start) / close@round_start
+
+|imb| >= ${FLOW_THRESHOLD}              -> сторона = sign(imb)
+sign(ret20) == sign(imb)       -> обязательно
+|ret20| >= ${RET_MAG_THR_BPS}бп             -> гейт, иначе HOLD
+ask <= 0.60 (BTC) / 0.70 (ETH) -> потолок цены`}
+          </pre>
+        </CardContent>
+      </Card>
     </div>
   );
 }
 
 export default function Dashboard() {
-  const { user, signOut } = useAuth();
-  const navigate = useNavigate();
-  const [market, setMarket] = useState<string>(MARKETS[0].key);
-  const [stake, setStake] = useState<StakeUsd>(5);
-  const paper = usePaperSession(stake, DEFAULT_PAPER);
-  const selected = MARKETS.find((m) => m.key === market) ?? MARKETS[0];
-
-  const handleSignOut = async () => {
-    await signOut();
-    navigate("/");
-  };
-
   return (
-    <div className="min-h-screen bg-background text-foreground">
-      <header className="sticky top-0 z-20 border-b border-border/70 bg-background/85 backdrop-blur">
-        <div className="mx-auto flex w-full max-w-6xl items-center gap-3 px-4 py-3 sm:px-6">
-          <LogoDropdown />
-          <div className="min-w-0">
-            <p className="text-sm leading-tight font-semibold tracking-tight">Maker Exit</p>
-            <p className="truncate text-[11px] leading-tight text-muted-foreground">
-              Вход лимитом по спросу · выход по лимиту · рынки 5m и 15m
-            </p>
-          </div>
-          <div className="ms-auto flex items-center gap-3">
-            <span className="hidden max-w-[180px] truncate text-xs text-muted-foreground sm:inline">
-              {user?.email ?? user?.name ?? "Гость"}
-            </span>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="gap-2"
-              onClick={handleSignOut}
-            >
-              <LogOut className="size-3.5" />
-              Выйти
-            </Button>
-          </div>
-        </div>
-      </header>
-
-      <main className="mx-auto flex w-full max-w-6xl flex-col gap-5 px-4 py-6 sm:px-6 sm:py-8">
-        <StakeSwitch stake={stake} onSelect={setStake} />
-        <MarketSwitch
-          active={market}
-          onSelect={setMarket}
-          sessions={paper.sessions}
-          perMarket={paper.perMarket}
-        />
-
-        <MakerRound
-          key={selected.key}
-          label={`${selected.asset.toUpperCase()} ${selected.interval}m`}
-          session={paper.sessions[selected.key]}
-          now={paper.now}
-          end={roundEnd(paper.now, selected.interval)}
-        />
-
-        <MakerStats stake={stake} />
-
-        <div className="grid gap-5 lg:grid-cols-2 lg:items-start">
-          <MakerEdge stake={stake} />
-          <MakerRules />
-        </div>
-
-        <PaperPanel
-          sessions={paper.sessions}
-          perMarket={paper.perMarket}
-          totals={paper.totals}
-          now={paper.now}
-          storedRounds={paper.storedRounds}
-          penetrationTicks={paper.settings.penetrationTicks}
-        />
-
-        <MakerJournal />
-
-        <p className="pb-2 text-center text-[11px] leading-relaxed text-muted-foreground">
-          Все переходы считаются по настоящему стакану Polymarket. Ордера не отправляются: консоль
-          воспроизводит состояние стратегии, чтобы проверить её на живых данных.
-        </p>
-      </main>
-    </div>
+    <RequireAuth>
+      <DashboardInner />
+    </RequireAuth>
   );
 }
