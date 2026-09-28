@@ -12,6 +12,30 @@ import { Link } from "react-router";
 
 type Asset = "btc" | "eth";
 
+type GradeBucket = {
+  price: number;
+  n: number;
+  hitRate: number | null;
+  avgAsk: number;
+  edge: number | null;
+  avgPnl: number;
+};
+
+type GradeResult = {
+  rounds: number;
+  signals: number;
+  wins: number;
+  noQuote: number;
+  noOutcome: number;
+  hitRate: number | null;
+  avgAsk: number | null;
+  avgPnl: number | null;
+  edge: number | null;
+  buckets: GradeBucket[];
+};
+
+type GradeStats = { rounds: number; quotes: number } | undefined;
+
 const ASSETS: { asset: Asset; label: string; symbol: string; cap: string }[] = [
   { asset: "btc", label: "BTC", symbol: "BTCUSDT", cap: "0.60" },
   { asset: "eth", label: "ETH", symbol: "ETHUSDT", cap: "0.70" },
@@ -19,6 +43,173 @@ const ASSETS: { asset: Asset; label: string; symbol: string; cap: string }[] = [
 
 /** Rounds needed before "hit rate vs price" separates from noise. */
 const ROUNDS_NEEDED = 300;
+
+const pp = (v: number) => `${v >= 0 ? "+" : "−"}${Math.abs(v * 100).toFixed(1)} п.п.`;
+
+/**
+ * The answer panel — the only number that decides whether this is a business.
+ *
+ * The console had a signal and no verdict, which made it impossible to answer
+ * the one question that matters. Everything here exists to put a price on the
+ * other side of the signal:
+ *
+ *     edge = hit rate − average ask
+ *
+ * A positive edge means the rule called the outcome more often than the entry
+ * price already implied. A negative one — and on a calibrated market that is
+ * the expected result — means the price contained the signal and there was
+ * nothing to collect.
+ */
+function Answer({ stats }: { stats: GradeStats | undefined }) {
+  const [result, setResult] = useState<GradeResult | null>(null);
+  const grade = useAction(api.grade.grade);
+
+  useEffect(() => {
+    let live = true;
+    // Grade only rounds that have had time to settle, so a fresh round is not
+    // reported as a loss simply because nobody has published its outcome yet.
+    const cutoff = Math.floor((Date.now() - 90_000) / 1000);
+    grade({ olderThanSec: cutoff, limit: 400 })
+      .then((r) => {
+        if (live) setResult(r);
+      })
+      .catch((error: unknown) => console.warn("[grade] failed", error));
+    return () => {
+      live = false;
+    };
+  }, [grade, stats?.rounds, stats?.quotes]);
+
+  if (!result) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Ответ</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-xs text-muted-foreground">Считаем по накопленным раундам…</p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (result.signals === 0) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Ответ</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            {result.rounds === 0
+              ? "Архив пуст — вкладка ещё не наблюдала рынок. Снимки стакана появляются в окне +12…+45с после старта раунда."
+              : `В архиве ${result.rounds} раундов, но ни по одному ещё нет исхода (${result.noOutcome} ждут расчёта). Ответ появится, когда Polymarket опубликует результаты.`}
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const edge = result.edge;
+  const verdict =
+    edge == null
+      ? null
+      : edge > 0.05
+        ? { text: "Сигнал бьёт цену — есть что собирать", tone: "up" as const }
+        : edge > -0.05
+          ? { text: "Сигнал совпадает с ценой — платить буквально не за что", tone: "flat" as const }
+          : { text: "Цена уже содержит сигнал — он стоит минус комиссия", tone: "down" as const };
+
+  return (
+    <Card
+      className={
+        verdict?.tone === "up"
+          ? "border-emerald-500/30 bg-emerald-500/5"
+          : verdict?.tone === "down"
+            ? "border-rose-500/30 bg-rose-500/5"
+            : "border-border/60"
+      }
+    >
+      <CardHeader>
+        <CardTitle className="text-base">Ответ: попадает ли сигнал больше, чем платит цена</CardTitle>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3">
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <Stat label="Оценено раундов" value={String(result.signals)} />
+          <Stat label="Попаданий" value={result.hitRate != null ? `${(result.hitRate * 100).toFixed(1)}%` : "—"} />
+          <Stat label="Средний вход" value={result.avgAsk != null ? result.avgAsk.toFixed(2) : "—"} />
+          <Stat
+            label="Перевес"
+            value={edge != null ? pp(edge) : "—"}
+            tone={edge == null ? undefined : edge > 0.02 ? "up" : edge < -0.02 ? "down" : undefined}
+          />
+        </div>
+
+        {verdict && (
+          <p className="text-xs leading-relaxed text-foreground/90">{verdict.text}</p>
+        )}
+
+        {result.avgPnl != null && (
+          <p className="font-mono text-[11px] text-muted-foreground">
+            чистыми на шар: {result.avgPnl >= 0 ? "+" : "−"}${Math.abs(result.avgPnl).toFixed(3)} (200bps
+            комиссии + 0.5ц проскальзывания)
+          </p>
+        )}
+
+        {result.buckets.length > 1 && (
+          <div className="overflow-x-auto">
+            <table className="w-full font-mono text-[11px]">
+              <thead>
+                <tr className="text-muted-foreground">
+                  <th className="py-1 text-left font-normal">вход</th>
+                  <th className="py-1 text-right font-normal">n</th>
+                  <th className="py-1 text-right font-normal">попаданий</th>
+                  <th className="py-1 text-right font-normal">перевес</th>
+                </tr>
+              </thead>
+              <tbody>
+                {result.buckets.map((b) => (
+                  <tr key={b.price} className="border-t border-border/50">
+                    <td className="py-1">{b.price.toFixed(1)}</td>
+                    <td className="py-1 text-right tabular-nums">{b.n}</td>
+                    <td className="py-1 text-right tabular-nums">
+                      {b.hitRate != null ? `${(b.hitRate * 100).toFixed(1)}%` : "—"}
+                    </td>
+                    <td
+                      className={`py-1 text-right tabular-nums ${(b.edge ?? 0) > 0.05 ? "text-emerald-500" : (b.edge ?? 0) < -0.05 ? "text-rose-500" : "text-muted-foreground"}`}
+                    >
+                      {b.edge != null ? pp(b.edge) : "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        <p className="text-[11px] leading-relaxed text-muted-foreground">
+          Пока n &lt; {ROUNDS_NEEDED}, разницу в несколько пунктов не отличить от шума. Честный
+          ответ требует дней наблюдения с открытой вкладкой.
+          {result.noQuote > 0 && ` Раундов без ask в окне: ${result.noQuote} — они исключены, а не заменены mid'ом.`}
+        </p>
+      </CardContent>
+    </Card>
+  );
+}
+
+function Stat({ label, value, tone }: { label: string; value: string; tone?: "up" | "down" }) {
+  return (
+    <div className="rounded-md border border-border/60 bg-card/50 px-2.5 py-2">
+      <p className="text-[10px] leading-tight text-muted-foreground uppercase">{label}</p>
+      <p
+        className={`mt-0.5 font-mono text-base tabular-nums ${
+          tone === "up" ? "text-emerald-500" : tone === "down" ? "text-rose-500" : "text-foreground"
+        }`}
+      >
+        {value}
+      </p>
+    </div>
+  );
+}
 
 /**
  * The verdict, stated as what is actually known.
@@ -209,7 +400,32 @@ function DashboardInner() {
         </Button>
       </header>
 
+      <Card className="border-border/60 bg-muted/20">
+        <CardContent className="p-3.5 text-[13px] leading-relaxed">
+          <p className="font-medium">Что здесь происходит</p>
+          <p className="mt-1 text-muted-foreground">
+            Каждые 5 минут на бирже открывается раунд с двумя контрактами — UP и DOWN. На
+            20-й секунде правило смотрит на поток тайкер-покупок за последние 30 секунд и решает,
+            в какую сторону пойдёт цена. Каждую секунду здесь же показан стакан — то есть
+            сколько бы пришлось реально заплатить.
+          </p>
+          <p className="mt-2 text-muted-foreground">
+            <b className="text-foreground">Главное — панель «Ответ».</b> Сигнал, попадающий
+            чаще монетки, ещё не значит прибыль: цена могла уже содержать этот сигнал. Поэтому
+            сравниваем попадания с тем, что пришлось бы заплатить. Если перевес около нуля —
+            заработать нельзя, и это тоже результат.
+          </p>
+          <p className="mt-2 text-muted-foreground">
+            Ордера не отправляются. Нужен открытый браузер: данные появляются только пока
+            страница открыта, потому что исторических исполненных сделок по этим рынкам не
+            существует.
+          </p>
+        </CardContent>
+      </Card>
+
       <Verdict rounds={stats?.rounds ?? 0} quotes={stats?.quotes ?? 0} />
+
+      <Answer stats={stats} />
 
       <div className="grid gap-3 sm:grid-cols-2">
         {ASSETS.map((a) => (
